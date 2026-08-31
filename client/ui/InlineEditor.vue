@@ -4,6 +4,7 @@ import type { SourceRange } from '../types'
 import { computed, nextTick, ref, watch } from 'vue'
 import { blockShape, canEditContainer, canEditVisually, serialiseBlock, serialiseContainer } from '../md/inline'
 import { toggleBullet, toggleHeading, toggleQuote, toggleTagWrap, toggleWrap, toLink } from '../md/format'
+import { replaceInnerHtml, stripStudioAttrs } from '../md/html'
 import { getBlock, replaceBlock } from '../md/lines'
 import { editing, reportError, selection } from '../state'
 import { useStudio } from '../context'
@@ -58,7 +59,11 @@ let held: SourceRange | null = null
  * around a different element. Which one is in play decides which serialiser
  * writes the result back.
  */
-let heldKind: 'block' | 'container' | 'prop' = 'block'
+let heldKind: 'block' | 'container' | 'prop' | 'html' = 'block'
+
+/** For an edit inside raw HTML: the element's tag, and the words it held. */
+let htmlTag = ''
+let htmlWas = ''
 
 
 
@@ -157,9 +162,29 @@ watch(editing, async (open) => {
   // Markdown that is already there. Testing the real markup against the real
   // source, rather than trusting the block's kind, is what keeps a component,
   // a styled span or a shape the serialiser would flatten out of this path.
-  mode.value = heldKind === 'container' || (shape.value && canEditVisually(source, element, shape.value))
-    ? 'visual'
-    : 'markdown'
+  /*
+   * Text inside raw HTML, once neither the block nor the container fits.
+   *
+   * A deck written by hand carries a lot of markup Markdown cannot express: a
+   * paragraph with utility classes, a grid of divs, a span around one word. The
+   * Markdown serialiser would give the text back and drop the tag with it, so
+   * such a block was only ever editable as source. The words can be replaced
+   * where they sit instead, and the markup around them left untouched, which is
+   * what makes most of a hand written deck clickable.
+   */
+  const blockFits = !!shape.value && canEditVisually(source, element, shape.value)
+
+  if (heldKind === 'block' && !blockFits) {
+    const tag = element.tagName.toLowerCase()
+    const was = element.textContent ?? ''
+    if (replaceInnerHtml(source, tag, was, '') !== null) {
+      heldKind = 'html'
+      htmlTag = tag
+      htmlWas = was
+    }
+  }
+
+  mode.value = heldKind === 'container' || heldKind === 'html' || blockFits ? 'visual' : 'markdown'
 
   await nextTick()
   if (mode.value === 'visual')
@@ -332,6 +357,25 @@ async function apply() {
   }
 
   const element = editable
+
+  if (heldKind === 'html' && element) {
+    // What goes back is what the browser will render: Markdown written inside
+    // an HTML block is passed through untouched, so `**bold**` would stay four
+    // asterisks on the slide.
+    const next = stripStudioAttrs(element.innerHTML).replace(/\s+/g, ' ').trim()
+    release()
+    editing.value = false
+    const block = getBlock(studio.content(), target)
+    const patched = replaceInnerHtml(block, htmlTag, htmlWas, next)
+    if (patched === null) {
+      reportError(new Error('That element could not be found in the Markdown any more, so nothing was changed.'))
+      return
+    }
+    if (patched !== block)
+      await studio.commit(replaceBlock(studio.content(), target, patched), 'Edit text')
+    return
+  }
+
   const written = element
     ? (heldKind === 'container'
         ? serialiseContainer(element as any, verbatim)
