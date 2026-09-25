@@ -100,7 +100,7 @@ try {
   await fs.writeFile(path.join(import.meta.dirname, 'e2e-formatted.png'), Buffer.from(screenshot.data, 'base64'))
   await command('Page.reload')
   await waitFor(() => evaluate(`document.querySelector('[data-studio-text-id="word-test"] .studio-text-run')?.style.fontSize === '72px'`), 'font size after browser reload')
-  assert.equal(await evaluate(`document.querySelector('[data-studio-text-id="word-test"] .studio-text-run')?.style.color`), 'rgb(255, 51, 68)')
+  await waitFor(() => evaluate(`document.querySelector('[data-studio-text-id="word-test"] .studio-text-run')?.style.color === 'rgb(255, 51, 68)'`), 'color after browser reload')
   // Re-enter after page reload. The session ID survives and server-side history
   // remains in the same dev process.
   await evaluate(`document.querySelector('[data-studio-text-id="word-test"]').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}))`)
