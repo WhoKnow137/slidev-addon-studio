@@ -88,6 +88,7 @@ describe('guarded StudioText transactions', () => {
     const duplicate = await read()
     await expect(command(hash(duplicate))).rejects.toMatchObject({ status: 409 })
     expect(await read()).toBe(duplicate)
+    await writeFile(path, fixture)
     expect((await service.status(1, 'alpha', 'test-session')).canUndo).toBe(false)
   })
 
