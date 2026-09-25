@@ -1,4 +1,5 @@
 import type { SourceHandle, TextDocument, TextPoint, StudioSelection } from '../shared/studiotext'
+import type { TypographyEdit } from '../shared/typography'
 import { shallowRef } from 'vue'
 import { graphemes } from '../shared/studiotext'
 import { slideElement } from './dom'
@@ -14,6 +15,7 @@ interface ActiveText {
   canUndo: boolean
   canRedo: boolean
   stale: boolean
+  editing: boolean
 }
 export const activeText = shallowRef<ActiveText | null>(null)
 export const textSelection = shallowRef<StudioSelection>({ mode: 'objects', ids: [] })
@@ -85,7 +87,10 @@ export function captureStudioTextSelection(): StudioSelection | null {
   const focus = pointFromDom(host, selected.focusNode, selected.focusOffset)
   if (!anchor || !focus) return null
   const logical: StudioSelection = anchor.paragraph === focus.paragraph && anchor.grapheme === focus.grapheme
-    ? { mode: 'textCaret', textId: state.id, at: anchor }
+    ? { mode: 'textCaret', textId: state.id, at: anchor,
+        ...(textSelection.value.mode === 'textCaret' && textSelection.value.textId === state.id
+          && textSelection.value.at.paragraph === anchor.paragraph && textSelection.value.at.grapheme === anchor.grapheme
+          ? { typingStyle: textSelection.value.typingStyle } : {}) }
     : { mode: 'textRange', textId: state.id, anchor, focus }
   textSelection.value = logical
   return logical
@@ -109,22 +114,27 @@ export function restoreStudioTextSelection(): boolean {
   return true
 }
 
-export async function beginStudioTextEdit(element: HTMLElement, no: number) {
+let loadGeneration = 0
+async function loadStudioText(element: HTMLElement, no: number, editing: boolean) {
   const id = element.dataset.studioTextId
   if (!id) return
+  if (!editing && activeText.value?.id === id && activeText.value.no === no) return
   endStudioTextEdit()
+  const generation = ++loadGeneration
   textError.value = null
   try {
     const response = await fetch(`/@studio/text?no=${no}&id=${encodeURIComponent(id)}&session=${session()}`)
     const result = await response.json()
+    if (generation !== loadGeneration) return
     if (!response.ok) {
       textError.value = result.error ?? `Source lookup failed (${response.status})`
       reportError(new Error(textError.value!))
       return
     }
     activeText.value = { id, no, handle: result.handle, document: result.document, reason: result.reason,
-      revision: result.handle.expectedRevision, canUndo: result.canUndo, canRedo: result.canRedo, stale: false }
-    if (result.editable) {
+      revision: result.handle.expectedRevision, canUndo: result.canUndo, canRedo: result.canRedo, stale: false, editing }
+    textSelection.value = { mode: 'objects', ids: [id] }
+    if (result.editable && editing) {
       element.setAttribute('contenteditable', 'true')
       element.setAttribute('spellcheck', 'false')
       captureStudioTextSelection()
@@ -136,12 +146,16 @@ export async function beginStudioTextEdit(element: HTMLElement, no: number) {
     reportError(error)
   }
 }
+export function inspectStudioText(element: HTMLElement, no: number) { return loadStudioText(element, no, false) }
+export function beginStudioTextEdit(element: HTMLElement, no: number) { return loadStudioText(element, no, true) }
 export function endStudioTextEdit() {
+  loadGeneration++
   root()?.removeAttribute('contenteditable')
   activeText.value = null
   textSelection.value = { mode: 'objects', ids: [] }
 }
-export async function studioTextCommand(action: 'format' | 'undo' | 'redo', property?: 'color' | 'fontSize', value?: string | number) {
+async function sendTextCommand(action: 'format' | 'typography' | 'undo' | 'redo',
+  property?: 'color' | 'fontSize', value?: string | number, edit?: TypographyEdit) {
   const state = activeText.value
   if (!state || state.stale || !state.document || textBusy.value) return false
   if (action === 'format' && textSelection.value.mode !== 'textRange') { textError.value = 'Select a word or range first.'; return false }
@@ -149,14 +163,16 @@ export async function studioTextCommand(action: 'format' | 'undo' | 'redo', prop
   try {
     const response = await fetch('/@studio/text', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action, no: state.no, id: state.id, session: session(), expectedRevision: state.revision,
-        selection: textSelection.value, property, value }) })
+        selection: textSelection.value, property, value, edit }) })
     const result = await response.json()
     if (!response.ok) {
       textError.value = result.error ?? `Text edit failed (${response.status})`
       if (response.status === 409) activeText.value = { ...state, stale: true }
       return false
     }
-    activeText.value = { ...state, revision: result.revision, canUndo: result.canUndo, canRedo: result.canRedo }
+    activeText.value = { ...state, revision: result.revision, document: result.document ?? state.document,
+      canUndo: result.canUndo, canRedo: result.canRedo }
+    if (result.selection) textSelection.value = result.selection
     textError.value = null
     // Slidev's watcher replaces the rendered component. Resolve it by stable ID,
     // then restore from model coordinates; never retain a DOM Range as state.
@@ -165,6 +181,12 @@ export async function studioTextCommand(action: 'format' | 'undo' | 'redo', prop
   }
   catch (error) { textError.value = error instanceof Error ? error.message : String(error); return false }
   finally { textBusy.value = false }
+}
+export function studioTextCommand(action: 'format' | 'undo' | 'redo', property?: 'color' | 'fontSize', value?: string | number) {
+  return sendTextCommand(action, property, value)
+}
+export function studioTypographyCommand(edit: TypographyEdit) {
+  return sendTextCommand('typography', undefined, undefined, edit)
 }
 
 export function installStudioTextSelection() {

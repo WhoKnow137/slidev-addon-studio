@@ -1,9 +1,11 @@
 import type { ResolvedSlidevOptions } from '@slidev/types'
-import type { SourceHandle, StudioSelection, TextDocument } from '../shared/studiotext'
+import type { SourceHandle, StudioSelection } from '../shared/studiotext'
+import type { TypographyEdit } from '../shared/typography'
 import { createHash, randomUUID } from 'node:crypto'
 import { open, readFile, realpath, rename, rm } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { parseStudioText, serializeStudioText, setCharacterProperty, uniqueStudioText } from '../shared/studiotext'
+import { parseStudioText, serializeStudioText, uniqueStudioText } from '../shared/studiotext'
+import { applyTypography } from '../shared/typography'
 import { splitDeck } from './slide-source'
 
 export class StudioTextError extends Error {
@@ -19,8 +21,13 @@ interface HistoryEntry {
   afterSource: string
   beforeSelection?: StudioSelection
   afterSelection?: StudioSelection
+  selectionOnly?: boolean
 }
 interface SessionHistory { undo: HistoryEntry[], redo: HistoryEntry[] }
+const historyFlags = (history: SessionHistory | undefined, filePath: string, id: string) => ({
+  canUndo: history?.undo.at(-1)?.filePath === filePath && history.undo.at(-1)?.textId === id,
+  canRedo: history?.redo.at(-1)?.filePath === filePath && history.redo.at(-1)?.textId === id,
+})
 const sha = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex')
 
 function textContent(bytes: Buffer): string {
@@ -88,7 +95,7 @@ export class StudioTextService {
     const history = session ? this.history.get(session) : undefined
     return { handle, editable: parsed.ok, reason: parsed.ok ? null : parsed.reason,
       document: parsed.ok ? parsed.document : null,
-      canUndo: !!history?.undo.length, canRedo: !!history?.redo.length }
+      ...historyFlags(history, ref.filePath, id) }
   }
 
   private async replace(ref: Awaited<ReturnType<StudioTextService['sourceRef']>>, expectedRevision: string,
@@ -126,7 +133,7 @@ export class StudioTextService {
   }
 
   async command(payload: {
-    action: 'format' | 'undo' | 'redo'
+    action: 'format' | 'typography' | 'undo' | 'redo'
     no: number
     id: string
     session: string
@@ -134,6 +141,7 @@ export class StudioTextService {
     selection?: StudioSelection
     property?: 'color' | 'fontSize'
     value?: string | number
+    edit?: TypographyEdit
   }) {
     if (typeof payload.session !== 'string' || !/^[a-zA-Z0-9-]{8,100}$/.test(payload.session)) throw new StudioTextError('Invalid editor session')
     if (typeof payload.expectedRevision !== 'string' || !/^[0-9a-f]{64}$/.test(payload.expectedRevision)) throw new StudioTextError('Missing source revision')
@@ -147,21 +155,37 @@ export class StudioTextService {
       if (!parsed.ok) throw new StudioTextError(`Visual text editing unavailable: ${parsed.reason}`, 422)
       const history = this.history.get(payload.session) ?? { undo: [], redo: [] }
       this.history.set(payload.session, history)
-      if (payload.action === 'format') {
-        if (payload.selection?.mode !== 'textRange' || payload.selection.textId !== payload.id)
-          throw new StudioTextError('Select a StudioText range before formatting')
-        if (!['color', 'fontSize'].includes(String(payload.property))) throw new StudioTextError('Unsupported format property')
-        const changed: TextDocument = setCharacterProperty(parsed.document, payload.selection, payload.property!, payload.value!)
-        if (JSON.stringify(changed) === JSON.stringify(parsed.document)) return { ok: true, noOp: true, revision, canUndo: history.undo.length > 0, canRedo: history.redo.length > 0 }
-        const replacement = serializeStudioText(changed)
+      if (payload.action === 'format' || payload.action === 'typography') {
+        if (!payload.selection) throw new StudioTextError('Select this StudioText before formatting')
+        if (payload.action === 'format' && (payload.selection.mode !== 'textRange' || !['color', 'fontSize'].includes(String(payload.property))))
+          throw new StudioTextError('Select a StudioText range and supported property before formatting')
+        const edit: TypographyEdit = payload.action === 'format'
+          ? { domain: 'character', property: payload.property!, value: payload.value! }
+          : payload.edit!
+        if (!edit || typeof edit !== 'object') throw new StudioTextError('Missing typography edit')
+        let outcomeModel
+        try { outcomeModel = applyTypography(parsed.document, payload.selection, edit) }
+        catch (error) { throw new StudioTextError((error as Error).message, 422) }
+        if (outcomeModel.noOp) return { ok: true, noOp: true, revision,
+          ...historyFlags(history, ref.filePath, payload.id), selection: outcomeModel.selection, document: parsed.document }
+        if (outcomeModel.document === parsed.document) {
+          history.undo.push({ label: `Set typing ${edit.property}`, filePath: ref.filePath, textId: payload.id,
+            beforeRevision: revision, afterRevision: revision, beforeSource: span.source, afterSource: span.source,
+            beforeSelection: payload.selection, afterSelection: outcomeModel.selection, selectionOnly: true })
+          history.redo = []
+          return { ok: true, noOp: false, revision, ...historyFlags(history, ref.filePath, payload.id),
+            selection: outcomeModel.selection, document: parsed.document }
+        }
+        const replacement = serializeStudioText(outcomeModel.document)
         const outcome = await this.replace(ref, revision, payload.id, replacement, before, beforeSource, span)
         if (!outcome.noOp) {
-          history.undo.push({ label: `Set text ${payload.property}`, filePath: ref.filePath, textId: payload.id,
+          history.undo.push({ label: `Set text ${edit.property}`, filePath: ref.filePath, textId: payload.id,
             beforeRevision: revision, afterRevision: outcome.revision, beforeSource: span.source, afterSource: replacement,
-            beforeSelection: payload.selection, afterSelection: payload.selection })
+            beforeSelection: payload.selection, afterSelection: outcomeModel.selection })
           history.redo = []
         }
-        return { ok: true, ...outcome, canUndo: history.undo.length > 0, canRedo: history.redo.length > 0, selection: payload.selection }
+        return { ok: true, ...outcome, ...historyFlags(history, ref.filePath, payload.id),
+          selection: outcomeModel.selection, document: outcomeModel.document }
       }
       if (payload.action !== 'undo' && payload.action !== 'redo') throw new StudioTextError('Unknown text action')
       const from = payload.action === 'undo' ? history.undo : history.redo
@@ -172,6 +196,12 @@ export class StudioTextService {
       const guardedSource = payload.action === 'undo' ? entry.afterSource : entry.beforeSource
       const replacement = payload.action === 'undo' ? entry.beforeSource : entry.afterSource
       if (revision !== guardedRevision || span.source !== guardedSource) throw new StudioTextError('stale-text-history', 409)
+      if (entry.selectionOnly) {
+        from.pop()
+        to.push(entry)
+        return { ok: true, noOp: false, revision, ...historyFlags(history, ref.filePath, payload.id),
+          selection: payload.action === 'undo' ? entry.beforeSelection : entry.afterSelection, document: parsed.document }
+      }
       const outcome = await this.replace(ref, revision, payload.id, replacement, before, beforeSource, span)
       if (!outcome.noOp) {
         from.pop()
@@ -179,8 +209,9 @@ export class StudioTextService {
         else entry.afterRevision = outcome.revision
         to.push(entry)
       }
-      return { ok: true, ...outcome, canUndo: history.undo.length > 0, canRedo: history.redo.length > 0,
-        selection: payload.action === 'undo' ? entry.beforeSelection : entry.afterSelection }
+      return { ok: true, ...outcome, ...historyFlags(history, ref.filePath, payload.id),
+        selection: payload.action === 'undo' ? entry.beforeSelection : entry.afterSelection,
+        document: parseStudioText(replacement).ok ? (parseStudioText(replacement) as { ok: true, document: typeof parsed.document }).document : parsed.document }
     })
   }
 }

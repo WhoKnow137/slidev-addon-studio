@@ -12,6 +12,7 @@ import { missed, selection } from '../../state'
 import PropField from '../parts/PropField.vue'
 import StudioField from '../parts/StudioField.vue'
 import StudioIcon from '../parts/StudioIcon.vue'
+import TypographyInspector from '../TypographyInspector.vue'
 
 /**
  * The properties panel: where the selected block lives, how it is styled, and
@@ -148,9 +149,9 @@ async function remove() {
     </p>
   </div>
 
-  <div v-else-if="selection?.el.closest('[data-studio-text-id]')" class="studio-empty">
-    <p>StudioText v1: double click the text, select a range, then use the Color or Size controls.</p>
-    <p class="studio-hint">Use Slidev’s source editor to change the words or edit unsupported markup.</p>
+  <div v-else-if="selection?.el.closest('[data-studio-text-id]')" class="studio-managed-inspect">
+    <TypographyInspector />
+    <p class="studio-hint">Double click text to select words. Use Slidev’s source editor to change the words or edit unsupported markup.</p>
   </div>
 
   <div v-else-if="!range" class="studio-empty">

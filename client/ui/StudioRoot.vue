@@ -16,7 +16,6 @@ import InlineEditor from './InlineEditor.vue'
 import SelectionLayer from './SelectionLayer.vue'
 import StudioDock from './StudioDock.vue'
 import StudioToolbar from './StudioToolbar.vue'
-import StudioTextControls from './StudioTextControls.vue'
 import '../../styles/studio.css'
 
 /**
@@ -184,7 +183,6 @@ watchEffect(() => {
       <template v-if="studioOpen">
         <SelectionLayer />
         <InlineEditor />
-        <StudioTextControls />
         <StudioDock />
       </template>
       <div v-if="lastError" class="studio-toast">

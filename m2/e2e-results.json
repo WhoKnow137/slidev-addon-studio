@@ -1,0 +1,21 @@
+{
+  "gate": "PASS",
+  "objectProperties": 9,
+  "rangeProperties": 4,
+  "caretTypingStyle": true,
+  "reload": true,
+  "undoRedo": true,
+  "mixedResolution": true,
+  "unsupportedReason": true,
+  "decorationInheritance": {
+    "base": "underline",
+    "override": "none"
+  },
+  "verticalPositions": {
+    "top": 0,
+    "center": 54.2508544921875,
+    "bottom": 108.50177001953125
+  },
+  "onlySelectedSubtreeChanged": true,
+  "originalSha256": "47716db94dd7891c26c8491dc3bc5604bddfd240601a2523abaee492e13cb170"
+}

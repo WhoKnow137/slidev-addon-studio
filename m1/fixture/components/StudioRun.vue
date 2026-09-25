@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, inject } from 'vue'
+import { studioDecorationKey } from './studio-decoration'
 const props = defineProps<{
   fontFamily?: string
   fontSize?: number | string
@@ -12,6 +13,7 @@ const props = defineProps<{
   textCase?: string
   link?: string
 }>()
+const inheritedDecoration = inject(studioDecorationKey, computed(() => 'none'))
 const style = computed(() => ({
   fontFamily: props.fontFamily,
   fontSize: props.fontSize == null ? undefined : `${props.fontSize}px`,
@@ -20,7 +22,7 @@ const style = computed(() => ({
   color: props.color,
   lineHeight: props.lineHeight,
   letterSpacing: props.letterSpacing,
-  textDecoration: props.decoration,
+  textDecorationLine: props.decoration ?? inheritedDecoration.value,
   textTransform: props.textCase,
 }))
 </script>

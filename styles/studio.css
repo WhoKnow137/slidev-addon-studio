@@ -950,24 +950,13 @@ html.slidev-studio-docked #page-root {
   transform-origin: 0 0;
   transition: transform 0.15s ease;
 }
-.studio-text-controls {
-  position: fixed;
-  z-index: 100;
-  right: calc(var(--studio-dock-width, 320px) + 12px);
-  top: 56px;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  max-width: 430px;
-  padding: 9px 12px;
-  color: #f5f5f5;
-  background: #25252b;
-  border: 1px solid #55556a;
-  border-radius: 8px;
-  font-size: 12px;
-}
-.studio-text-controls strong { flex-basis: 100%; }
-.studio-text-controls label { display: flex; align-items: center; gap: 4px; }
-.studio-text-controls input[type="number"] { width: 58px; }
-.studio-text-controls .studio-hint { flex-basis: 100%; margin: 0; }
+.studio-managed-inspect > .studio-hint { padding: 0 12px 12px; }
+.studio-typography { display: grid; gap: 10px; }
+.studio-typography .studio-hint { margin: 0; }
+.studio-type-field { display: grid; gap: 4px; color: var(--studio-text-dim); font-size: 12px; }
+.studio-type-field small { font-size: 11px; }
+.studio-type-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.studio-type-color { display: flex; gap: 6px; }
+.studio-type-color input[type="color"] { width: 36px; min-width: 36px; height: 29px; padding: 1px; }
+.studio-typography .studio-button-row .studio-button { min-width: 0; }
+.studio-typography .studio-button[aria-pressed="true"] { border-color: var(--studio-accent); color: var(--studio-accent); }

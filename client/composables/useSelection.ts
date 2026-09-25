@@ -7,7 +7,7 @@ import { onDomEvent } from './useDomEvent'
 import { normalise, resolveRange } from '../md/locate'
 import { readDrag } from '../md/drag'
 import { editing, hovered, missed, selection, studioOpen } from '../state'
-import { activeText, beginStudioTextEdit, endStudioTextEdit, textSelection } from '../studiotext-editor'
+import { activeText, beginStudioTextEdit, endStudioTextEdit, inspectStudioText, textSelection } from '../studiotext-editor'
 
 /**
  * Turns a click on the rendered slide into a Markdown range Studio can edit.
@@ -183,15 +183,18 @@ export function useSelection(
       missed.value = onSlide
       if (onSlide)
         selection.value = null
+      if (onSlide) endStudioTextEdit()
       return
     }
     // StudioText must receive native pointer selection so a second click can
     // select a word. Its geometry controls arrive in M3.
-    if (target.el.closest('[data-studio-text-id]')) {
+    const managed = target.el.closest<HTMLElement>('[data-studio-text-id]')
+    if (managed) {
       missed.value = false
       selection.value = target
-      const id = target.el.closest<HTMLElement>('[data-studio-text-id]')?.dataset.studioTextId
+      const id = managed.dataset.studioTextId
       if (id) textSelection.value = { mode: 'objects', ids: [id] }
+      void inspectStudioText(managed, no())
       return
     }
     // Claim the gesture before Slidev's own `v-drag` handles or a link can.
@@ -199,6 +202,7 @@ export function useSelection(
     event.stopPropagation()
     missed.value = false
     selection.value = target
+    endStudioTextEdit()
   }, { capture: true })
 
   onDomEvent<PointerEvent>(document, 'pointermove', (event) => {

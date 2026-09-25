@@ -39,6 +39,10 @@ async function evaluate(expression) {
   return answer.result?.value
 }
 const source = () => fs.readFile(file, 'utf8')
+const setField = async (label, value) => {
+  await waitFor(() => evaluate(`(() => { const el=document.querySelector('[data-testid="typography-inspector"] [aria-label=${JSON.stringify(label)}]'); return !!el && !el.disabled; })()`), `ready ${label}`)
+  return evaluate(`(() => { const input=document.querySelector('[data-testid="typography-inspector"] [aria-label=${JSON.stringify(label)}]'); input.value=${JSON.stringify(value)}; input.dispatchEvent(new Event('input',{bubbles:true})); input.dispatchEvent(new Event('change',{bubbles:true})); return true })()`)
+}
 const selectWord = () => evaluate(`(() => {
   const el=document.querySelector('[data-studio-text-id="word-test"]');
   const walker=document.createTreeWalker(el,NodeFilter.SHOW_TEXT);
@@ -74,10 +78,11 @@ try {
     await command('Input.dispatchMouseEvent', { type: 'mousePressed', x: coordinate.x, y: coordinate.y, button: 'left', clickCount })
     await command('Input.dispatchMouseEvent', { type: 'mouseReleased', x: coordinate.x, y: coordinate.y, button: 'left', clickCount })
   }
-  await waitFor(() => evaluate(`!!document.querySelector('[data-testid="studio-text-controls"]')`), 'text edit controls after double-click')
+  await waitFor(() => evaluate(`!!document.querySelector('[data-testid="typography-inspector"]')`), 'typography inspector after double-click')
+  await waitFor(() => evaluate(`document.querySelector('[data-studio-text-id="word-test"]')?.isContentEditable`), 'editable text after double-click')
   const genericGuard = await evaluate(`(() => {
     const dock=document.querySelector('.studio-dock');
-    const hint=[...dock.querySelectorAll('.studio-empty')].some(el=>el.textContent.includes('StudioText v1:'));
+    const hint=!!dock.querySelector('[data-testid="typography-inspector"]');
     const oldInspector=[...dock.querySelectorAll('.studio-section__title')].some(el=>['Position','Style','Arrange','Markdown'].includes(el.textContent.trim()));
     const handles=document.querySelectorAll('.studio-frame .studio-move, .studio-frame .studio-handle').length;
     return {hint,oldInspector,handles};
@@ -85,14 +90,14 @@ try {
   assert.deepEqual(genericGuard, { hint: true, oldInspector: false, handles: 0 }, 'generic inspector and transform actions must be unavailable')
   const word = await selectWord()
   assert.deepEqual(word, { word: 'world', editable: true })
-  await waitFor(() => evaluate(`document.querySelector('[data-testid="studio-text-controls"]')?.textContent?.includes('Text range selected')`), 'model range')
+  await waitFor(() => evaluate(`document.querySelector('[data-testid="typography-inspector"]')?.textContent?.includes('Selected text range')`), 'model range')
   const initial = await source()
-  await evaluate(`(() => { const input=document.querySelector('input[aria-label="Text color"]'); input.value='#ff3344'; input.dispatchEvent(new Event('input',{bubbles:true})); input.dispatchEvent(new Event('change',{bubbles:true})); return true })()`)
+  await setField('Text color hex', '#ff3344')
   const colored = await waitFor(async () => { const value = await source(); return value.includes('color="#ff3344">world</StudioRun>') ? value : null }, 'color transaction')
   await waitFor(() => evaluate(`window.getSelection()?.toString() === 'world'`), 'word selection after color HMR')
   assert.equal(colored.slice(0, colored.indexOf('<StudioText')), initial.slice(0, initial.indexOf('<StudioText')))
   assert.equal(colored.slice(colored.indexOf('</StudioText>') + 13), initial.slice(initial.indexOf('</StudioText>') + 13))
-  await evaluate(`(() => { const input=document.querySelector('input[aria-label="Text size"]'); input.value='72'; input.dispatchEvent(new Event('input',{bubbles:true})); input.dispatchEvent(new Event('change',{bubbles:true})); return true })()`)
+  await setField('Font size', '72')
   const formatted = await waitFor(async () => { const value = await source(); return value.includes('font-size="72" color="#ff3344">world') ? value : null }, 'size transaction')
   await waitFor(() => evaluate(`window.getSelection()?.toString() === 'world'`), 'word selection after size HMR')
   await fs.writeFile(path.join(import.meta.dirname, 'fixture', 'pages', '002-formatted.md'), formatted)
@@ -104,21 +109,21 @@ try {
   // Re-enter after page reload. The session ID survives and server-side history
   // remains in the same dev process.
   await evaluate(`document.querySelector('[data-studio-text-id="word-test"]').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}))`)
-  await waitFor(() => evaluate(`!!document.querySelector('[data-testid="studio-text-controls"] button:not([disabled])')`), 'controls after reload')
-  await evaluate(`document.querySelector('[data-testid="studio-text-controls"] button:nth-of-type(2)')?.click()`)
+  await waitFor(() => evaluate(`!!document.querySelector('[data-testid="typography-inspector"] [aria-label="Undo text"]:not([disabled])')`), 'controls after reload')
+  await evaluate(`document.querySelector('[data-testid="typography-inspector"] [aria-label="Undo text"]')?.click()`)
   await waitFor(async () => (await source()) === colored, 'undo size')
-  await evaluate(`document.querySelector('[data-testid="studio-text-controls"] button:nth-of-type(3)')?.click()`)
+  await evaluate(`document.querySelector('[data-testid="typography-inspector"] [aria-label="Redo text"]')?.click()`)
   await waitFor(async () => (await source()) === formatted, 'redo size')
   await selectWord()
   const external = `${await source()}\nExternal editor change.\n`
   await fs.writeFile(file, external)
-  await evaluate(`(() => { const input=document.querySelector('input[aria-label="Text color"]'); input.value='#00ff00'; input.dispatchEvent(new Event('input',{bubbles:true})); input.dispatchEvent(new Event('change',{bubbles:true})); return true })()`)
-  await waitFor(() => evaluate(`document.querySelector('[data-testid="studio-text-controls"]')?.textContent?.includes('Source changed outside this editor')`), 'stale editor state')
+  await setField('Text color hex', '#00ff00')
+  await waitFor(() => evaluate(`document.querySelector('[data-testid="typography-inspector"]')?.textContent?.includes('Source changed outside this editor')`), 'stale editor state')
   assert.equal(await source(), external, 'stale write changes zero bytes')
-  await evaluate(`document.querySelector('[data-testid="studio-text-controls"] button:last-of-type')?.click()`)
-  await waitFor(() => evaluate(`!document.querySelector('[data-testid="studio-text-controls"]')?.textContent?.includes('Source changed outside this editor')`), 'explicit source reload')
+  await evaluate(`[...document.querySelectorAll('[data-testid="typography-inspector"] button')].find(el=>el.textContent.includes('Reload text'))?.click()`)
+  await waitFor(() => evaluate(`!document.querySelector('[data-testid="typography-inspector"]')?.textContent?.includes('Source changed outside this editor')`), 'explicit source reload')
   await evaluate(`document.querySelector('[data-studio-text-id="unsupported-text"]').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}))`)
-  await waitFor(() => evaluate(`document.querySelector('[data-testid="studio-text-controls"]')?.textContent?.includes('Unsupported nested element')`), 'unsupported-source reason')
+  await waitFor(() => evaluate(`document.querySelector('[data-testid="typography-inspector"]')?.textContent?.includes('Unsupported nested element')`), 'unsupported-source reason')
   assert.equal(await evaluate(`document.querySelector('[data-studio-text-id="unsupported-text"]')?.textContent`), 'Unsupported markup remains visible.')
   assert.equal(await source(), external, 'unsupported source remains byte-identical')
   const result = { gate: 'PASS', originalSha256: crypto.createHash('sha256').update(original).digest('hex'),

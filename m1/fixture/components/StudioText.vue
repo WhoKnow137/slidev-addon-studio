@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, provide } from 'vue'
+import { DecoratedContent, studioDecorationKey } from './studio-decoration'
 const props = defineProps<{
   version: string
   id: string
@@ -13,14 +14,22 @@ const props = defineProps<{
   color?: string
   lineHeight?: number | string
   letterSpacing?: number | string
+  decoration?: string
+  textCase?: string
   align?: string
   verticalAlign?: string
   styleRef?: string
 }>()
+provide(studioDecorationKey, computed(() => props.decoration ?? 'none'))
 const style = computed(() => {
   const [x, y, width, height] = props.pos.split(',')
   return {
     position: 'absolute' as const,
+    display: props.resize === 'fixed' ? 'flex' : 'block',
+    flexDirection: props.resize === 'fixed' ? 'column' as const : undefined,
+    justifyContent: props.resize === 'fixed'
+      ? props.verticalAlign === 'bottom' ? 'flex-end' : props.verticalAlign === 'center' ? 'center' : 'flex-start'
+      : undefined,
     left: `${x}px`, top: `${y}px`,
     width: width === 'auto' ? 'max-content' : `${width}px`,
     height: height === 'auto' ? 'auto' : `${height}px`,
@@ -32,13 +41,13 @@ const style = computed(() => {
     color: props.color ?? '#ffffff',
     lineHeight: props.lineHeight ?? 'normal',
     letterSpacing: props.letterSpacing,
+    textTransform: props.textCase ?? 'none',
     textAlign: props.align as any,
-    verticalAlign: props.verticalAlign as any,
     whiteSpace: 'pre-wrap' as const,
   }
 })
 </script>
 
 <template>
-  <div class="studio-text-v1" :data-studio-text-id="id" :data-studio-text-version="version" :data-resize="resize" :style="style"><slot /></div>
+  <div class="studio-text-v1" :data-studio-text-id="id" :data-studio-text-version="version" :data-resize="resize" :style="style"><div class="studio-text-content"><DecoratedContent :decoration="decoration ?? 'none'"><slot /></DecoratedContent></div></div>
 </template>

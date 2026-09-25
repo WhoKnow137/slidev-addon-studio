@@ -11,8 +11,8 @@ export interface CharacterStyle {
   color: string
   lineHeight: number | string
   letterSpacing: number | string
-  decoration: string
-  textCase: string
+  decoration: 'none' | 'underline' | 'line-through' | 'underline line-through'
+  textCase: 'none' | 'uppercase' | 'lowercase' | 'capitalize'
   link?: string
   fontAxes?: Record<string, number>
   openType?: Record<string, boolean | number>
@@ -62,7 +62,7 @@ export interface SourceHandle {
 }
 export type ParseResult = { ok: true, document: TextDocument } | { ok: false, reason: string }
 
-const textAttrs = new Set(['version', 'id', 'pos', 'resize', 'rotate', 'font-family', 'font-size', 'font-weight', 'font-style', 'color', 'line-height', 'letter-spacing', 'align', 'vertical-align', 'style-ref'])
+const textAttrs = new Set(['version', 'id', 'pos', 'resize', 'rotate', 'font-family', 'font-size', 'font-weight', 'font-style', 'color', 'line-height', 'letter-spacing', 'decoration', 'text-case', 'align', 'vertical-align', 'style-ref'])
 const runAttrs = new Set(['font-family', 'font-size', 'font-weight', 'font-style', 'color', 'line-height', 'letter-spacing', 'decoration', 'text-case', 'link'])
 const paragraphAttrs = new Set(['align'])
 const numericAttrs = new Set(['rotate', 'font-size', 'font-weight', 'letter-spacing'])
@@ -111,27 +111,64 @@ function number(value: string | number | undefined, label: string, fallback: num
 function string(value: string | number | undefined, fallback: string): string {
   return value === undefined ? fallback : String(value)
 }
+export type EditableCharacterProperty = 'fontFamily' | 'fontWeight' | 'fontStyle' | 'fontSize' | 'color' | 'lineHeight' | 'letterSpacing' | 'decoration' | 'textCase'
+export function validateCharacterValue(property: EditableCharacterProperty, input: unknown): CharacterStyle[EditableCharacterProperty] {
+  const raw = String(input)
+  switch (property) {
+    case 'fontFamily':
+      if (!raw.trim() || raw.length > 256 || /[\r\n\u0000-\u001f]/.test(raw)) fail('Invalid font family')
+      return raw
+    case 'fontWeight':
+      if (typeof input !== 'number' && !/^(?:\d+)(?:\.\d+)?$/.test(raw)) fail('Invalid font weight')
+      if (!Number.isFinite(Number(input)) || Number(input) < 1 || Number(input) > 1000) fail('Invalid font weight')
+      return Number(input)
+    case 'fontSize':
+      if (!Number.isFinite(Number(input)) || Number(input) <= 0) fail('Invalid font size')
+      return Number(input)
+    case 'fontStyle':
+      if (!['normal', 'italic', 'oblique'].includes(raw)) fail('Invalid font style')
+      return raw as CharacterStyle['fontStyle']
+    case 'color':
+      if (!/^#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?$/.test(raw)) fail('Invalid color')
+      return raw.toLowerCase()
+    case 'lineHeight':
+      if (raw === 'normal') return 'normal'
+      if (/^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(raw)) return Number(raw)
+      if (/^(?:0|[1-9]\d*)(?:\.\d+)?(?:px|%)$/.test(raw)) return raw
+      fail('Invalid line height')
+    case 'letterSpacing':
+      if (raw === '0') return 0
+      if (/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:px|em)$/.test(raw)) return raw
+      fail('Invalid letter spacing')
+    case 'decoration':
+      if (!['none', 'underline', 'line-through', 'underline line-through'].includes(raw)) fail('Invalid decoration')
+      return raw as CharacterStyle['decoration']
+    case 'textCase':
+      if (!['none', 'uppercase', 'lowercase', 'capitalize'].includes(raw)) fail('Invalid text case')
+      return raw as CharacterStyle['textCase']
+  }
+}
 function styleAttrs(values: Record<string, string | number>): Partial<CharacterStyle> {
   const style: Partial<CharacterStyle> = {}
-  if (values['font-family'] !== undefined) style.fontFamily = String(values['font-family'])
-  if (values['font-size'] !== undefined) style.fontSize = number(values['font-size'], 'font-size', 32)
-  if (values['font-weight'] !== undefined) style.fontWeight = number(values['font-weight'], 'font-weight', 400)
+  if (values['font-family'] !== undefined) style.fontFamily = validateCharacterValue('fontFamily', values['font-family']) as string
+  if (values['font-size'] !== undefined) style.fontSize = validateCharacterValue('fontSize', values['font-size']) as number
+  if (values['font-weight'] !== undefined) style.fontWeight = validateCharacterValue('fontWeight', values['font-weight']) as number
   if (values['font-style'] !== undefined) {
     const value = String(values['font-style'])
     if (!['normal', 'italic', 'oblique'].includes(value)) fail('Invalid font-style')
     style.fontStyle = value as CharacterStyle['fontStyle']
   }
-  if (values.color !== undefined) style.color = String(values.color)
+  if (values.color !== undefined) style.color = validateCharacterValue('color', values.color) as string
   if (values['line-height'] !== undefined) {
     const raw = String(values['line-height'])
-    style.lineHeight = /^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(raw) ? Number(raw) : raw
+    style.lineHeight = validateCharacterValue('lineHeight', raw) as CharacterStyle['lineHeight']
   }
   if (values['letter-spacing'] !== undefined) {
     const raw = String(values['letter-spacing'])
-    style.letterSpacing = /^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(raw) ? Number(raw) : raw
+    style.letterSpacing = validateCharacterValue('letterSpacing', raw) as CharacterStyle['letterSpacing']
   }
-  if (values.decoration !== undefined) style.decoration = String(values.decoration)
-  if (values['text-case'] !== undefined) style.textCase = String(values['text-case'])
+  if (values.decoration !== undefined) style.decoration = validateCharacterValue('decoration', values.decoration) as CharacterStyle['decoration']
+  if (values['text-case'] !== undefined) style.textCase = validateCharacterValue('textCase', values['text-case']) as CharacterStyle['textCase']
   if (values.link !== undefined) style.link = String(values.link)
   return style
 }
@@ -195,7 +232,8 @@ export function parseStudioText(source: string): ParseResult {
         const props = attrs(paragraph, paragraphAttrs)
         const paragraphAlign = string(props.align, 'left')
         if (!['left', 'center', 'right', 'justify'].includes(paragraphAlign)) fail('Invalid paragraph align')
-        paragraphs.push({ properties: { align: paragraphAlign as ParagraphStyle['align'] }, runs: content(paragraph.children, false) })
+        paragraphs.push({ properties: props.align === undefined ? {} : { align: paragraphAlign as ParagraphStyle['align'] },
+          runs: content(paragraph.children, false) })
       }
     }
     else paragraphs.push({ properties: {}, runs: content(element.children, false) })
@@ -232,41 +270,36 @@ export function normalizeText(document: TextDocument): TextDocument {
   return copy
 }
 
-function orderedRange(range: { anchor: TextPoint, focus: TextPoint }): [TextPoint, TextPoint] {
+export function orderedRange(range: { anchor: TextPoint, focus: TextPoint }): [TextPoint, TextPoint] {
   const compare = range.anchor.paragraph - range.focus.paragraph || range.anchor.grapheme - range.focus.grapheme
   return compare <= 0 ? [range.anchor, range.focus] : [range.focus, range.anchor]
 }
-export function setCharacterProperty(document: TextDocument, range: { anchor: TextPoint, focus: TextPoint }, property: 'color' | 'fontSize', value: string | number): TextDocument {
-  if (property === 'fontSize' && (typeof value !== 'number' || !Number.isFinite(value) || value <= 0)) fail('Invalid font size')
-  if (property === 'color' && (typeof value !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(value))) fail('Invalid color')
-  const [start, end] = orderedRange(range)
-  // A command that changes no effective character style must keep the original
-  // source bytes. Normalizing an untouched object would be an unwanted edit.
-  let changesEffectiveStyle = false
-  for (let p = start.paragraph; p <= end.paragraph; p++) {
-    const paragraph = document.paragraphs[p]
-    if (!paragraph) fail('Range outside document')
-    const length = paragraph.runs.reduce((total, run) => total + count(run.text), 0)
-    const lo = p === start.paragraph ? start.grapheme : 0
-    const hi = p === end.paragraph ? end.grapheme : length
-    if (lo < 0 || hi > length || hi < lo) fail('Range outside paragraph')
-    let offset = 0
-    for (const run of paragraph.runs) {
-      const endOfRun = offset + count(run.text)
-      if (Math.max(offset, lo) < Math.min(endOfRun, hi) && (run.overrides[property] ?? document.defaults[property]) !== value)
-        changesEffectiveStyle = true
-      offset = endOfRun
-    }
+export function setCharacterProperties(document: TextDocument, range: { anchor: TextPoint, focus: TextPoint },
+  input: Partial<Pick<CharacterStyle, EditableCharacterProperty>>): TextDocument {
+  const patch: Partial<CharacterStyle> = {}
+  for (const [key, value] of Object.entries(input)) {
+    if (value === undefined) continue
+    if (!['fontFamily', 'fontWeight', 'fontStyle', 'fontSize', 'color', 'lineHeight', 'letterSpacing', 'decoration', 'textCase'].includes(key))
+      fail(`Unsupported character property: ${key}`)
+    ;(patch as any)[key] = validateCharacterValue(key as EditableCharacterProperty, value)
   }
-  if (!changesEffectiveStyle) return document
+  if (!Object.keys(patch).length) return document
+  return mapCharacterRange(document, range, () => patch)
+}
+
+/** One grapheme-safe split/merge engine for every character command. */
+export function mapCharacterRange(document: TextDocument, range: { anchor: TextPoint, focus: TextPoint },
+  change: (effective: CharacterStyle) => Partial<CharacterStyle>): TextDocument {
+  const [start, end] = orderedRange(range)
   const copy = structuredClone(document)
   if (start.paragraph < 0 || end.paragraph >= copy.paragraphs.length) fail('Range outside document')
+  let changed = false
   for (let p = start.paragraph; p <= end.paragraph; p++) {
     const paragraph = copy.paragraphs[p]
     const length = paragraph.runs.reduce((n, run) => n + count(run.text), 0)
     const lo = p === start.paragraph ? start.grapheme : 0
     const hi = p === end.paragraph ? end.grapheme : length
-    if (lo < 0 || hi > length) fail('Range outside paragraph')
+    if (lo < 0 || hi > length || hi < lo) fail('Range outside paragraph')
     if (lo === hi) continue
     const next: TextRun[] = []
     let offset = 0
@@ -275,13 +308,24 @@ export function setCharacterProperty(document: TextDocument, range: { anchor: Te
       const a = Math.max(0, Math.min(pieces.length, lo - offset))
       const b = Math.max(0, Math.min(pieces.length, hi - offset))
       if (a) next.push({ text: pieces.slice(0, a).join(''), overrides: { ...run.overrides } })
-      if (b > a) next.push({ text: pieces.slice(a, b).join(''), overrides: { ...run.overrides, [property]: value } })
+      if (b > a) {
+        const effective = { ...document.defaults, ...run.overrides }
+        const patch = change(effective)
+        for (const key of Object.keys(patch) as (keyof CharacterStyle)[]) {
+          if (effective[key] !== patch[key]) changed = true
+        }
+        next.push({ text: pieces.slice(a, b).join(''), overrides: { ...run.overrides, ...patch } })
+      }
       if (b < pieces.length) next.push({ text: pieces.slice(b).join(''), overrides: { ...run.overrides } })
       offset += pieces.length
     }
     paragraph.runs = next
   }
-  return normalizeText(copy)
+  return changed ? normalizeText(copy) : document
+}
+export function setCharacterProperty(document: TextDocument, range: { anchor: TextPoint, focus: TextPoint },
+  property: 'color' | 'fontSize', value: string | number): TextDocument {
+  return setCharacterProperties(document, range, { [property]: value })
 }
 
 const escapeText = (value: string) => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
@@ -307,7 +351,10 @@ export function serializeStudioText(input: TextDocument): string {
     `version="1"`, `id="${escapeAttr(doc.id)}"`, `pos="${pos}"`, `resize="${doc.resizeMode}"`, `:rotate="${n(g.rotationDeg)}"`,
     `font-family="${escapeAttr(d.fontFamily)}"`, `:font-size="${n(d.fontSize)}"`, `font-weight="${n(d.fontWeight)}"`,
     `font-style="${d.fontStyle}"`, `color="${escapeAttr(d.color)}"`, `line-height="${escapeAttr(String(d.lineHeight))}"`,
-    `letter-spacing="${escapeAttr(String(d.letterSpacing))}"`, `align="${doc.align}"`,
+    `letter-spacing="${escapeAttr(String(d.letterSpacing))}"`,
+    ...(d.decoration !== 'none' ? [`decoration="${d.decoration}"`] : []),
+    ...(d.textCase !== 'none' ? [`text-case="${d.textCase}"`] : []),
+    `align="${doc.align}"`,
     `vertical-align="${doc.verticalAlign}"`, ...(doc.styleRef !== undefined ? [`style-ref="${escapeAttr(doc.styleRef)}"`] : []),
   ]
   const explicit = doc.paragraphs.length > 1 || !!doc.paragraphs[0]?.properties.align
