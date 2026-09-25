@@ -5,6 +5,7 @@ import { buildCatalog } from './catalog'
 import { readPalette } from './palette'
 import { assetRoot, listAssets, saveAsset } from './assets'
 import { applyDeckAction } from './deck'
+import { StudioTextService } from './studio-text-service'
 
 const VIRTUAL_CATALOG = 'virtual:slidev-studio/catalog'
 const RESOLVED_CATALOG = `\0${VIRTUAL_CATALOG}`
@@ -23,6 +24,7 @@ const STUDIO_BLOCK_REQUEST = /[?&]vue&type=studio\b/
  * empty catalog and registers no routes.
  */
 export function studioPlugin(options: ResolvedSlidevOptions): Plugin {
+  const studioText = new StudioTextService(options)
 
   const isDev = options.mode === 'dev' && options.data.config.editor !== false
   const config = studioConfig(options)
@@ -84,7 +86,7 @@ export function studioPlugin(options: ResolvedSlidevOptions): Plugin {
 
         const route = url.slice(API_PREFIX.length)
         try {
-          const result = await handle(route, req.method ?? 'GET', req, options)
+          const result = await handle(route, req.method ?? 'GET', req, options, studioText)
           if (result === undefined)
             return next()
 
@@ -102,7 +104,7 @@ export function studioPlugin(options: ResolvedSlidevOptions): Plugin {
           res.end(JSON.stringify(result))
         }
         catch (error: any) {
-          res.statusCode = 400
+          res.statusCode = Number.isInteger(error?.status) ? error.status : 400
           res.setHeader('Content-Type', 'application/json')
           res.end(JSON.stringify({ error: error?.message ?? String(error) }))
         }
@@ -126,7 +128,15 @@ export function studioPlugin(options: ResolvedSlidevOptions): Plugin {
   }
 }
 
-async function handle(route: string, method: string, req: any, options: ResolvedSlidevOptions) {
+async function handle(route: string, method: string, req: any, options: ResolvedSlidevOptions, studioText: StudioTextService) {
+  if (route === 'text' && method === 'GET') {
+    const query = new URL(req.url ?? '/', 'http://localhost').searchParams
+    return await studioText.status(Number(query.get('no')), query.get('id') ?? '', query.get('session') ?? undefined)
+  }
+
+  if (route === 'text' && method === 'POST')
+    return await studioText.command(await readLimitedJson(req))
+
   if (route === 'catalog' && method === 'GET')
     return { ...await buildCatalog(options), palette: await readPalette(options) }
 
@@ -148,6 +158,17 @@ async function readJson(req: any) {
     chunks.push(chunk)
   const body = Buffer.concat(chunks).toString('utf-8')
   return body ? JSON.parse(body) : {}
+}
+
+async function readLimitedJson(req: any) {
+  const chunks: Buffer[] = []
+  let size = 0
+  for await (const chunk of req) {
+    size += chunk.length
+    if (size > 262_144) throw new Error('StudioText request too large')
+    chunks.push(chunk)
+  }
+  return JSON.parse(Buffer.concat(chunks).toString('utf8'))
 }
 
 /**

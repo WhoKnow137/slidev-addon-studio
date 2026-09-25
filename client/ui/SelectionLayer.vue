@@ -185,6 +185,7 @@ function handleStyle(rect: Rect, handle: typeof handles[number]) {
           it covers, which is what the user aimed at.
         -->
         <div
+          v-if="!selection.el.closest('[data-studio-text-id]')"
           class="studio-move"
           @pointerdown="studio.gizmo.startMove($event)"
         />

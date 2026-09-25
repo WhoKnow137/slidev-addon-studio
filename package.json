@@ -24,6 +24,7 @@
   },
   "files": [
     "client",
+    "components",
     "node",
     "setup",
     "shared",
@@ -44,6 +45,7 @@
     "vue": "^3.5.0"
   },
   "dependencies": {
+    "@vue/compiler-dom": "3.5.41",
     "@vueuse/core": "^14.0.0",
     "yaml": "^2.9.0"
   },

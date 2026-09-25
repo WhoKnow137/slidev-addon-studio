@@ -7,6 +7,7 @@ import { onDomEvent } from './useDomEvent'
 import { normalise, resolveRange } from '../md/locate'
 import { readDrag } from '../md/drag'
 import { editing, hovered, missed, selection, studioOpen } from '../state'
+import { activeText, beginStudioTextEdit, endStudioTextEdit, textSelection } from '../studiotext-editor'
 
 /**
  * Turns a click on the rendered slide into a Markdown range Studio can edit.
@@ -184,6 +185,15 @@ export function useSelection(
         selection.value = null
       return
     }
+    // StudioText must receive native pointer selection so a second click can
+    // select a word. Its geometry controls arrive in M3.
+    if (target.el.closest('[data-studio-text-id]')) {
+      missed.value = false
+      selection.value = target
+      const id = target.el.closest<HTMLElement>('[data-studio-text-id]')?.dataset.studioTextId
+      if (id) textSelection.value = { mode: 'objects', ids: [id] }
+      return
+    }
     // Claim the gesture before Slidev's own `v-drag` handles or a link can.
     event.preventDefault()
     event.stopPropagation()
@@ -223,6 +233,12 @@ export function useSelection(
     // container.
     if (event.target instanceof Element && event.target.closest('.studio-move')) {
       const beneath = throughChrome(event.clientX, event.clientY) ?? selection.value
+      const studioText = beneath?.el.closest<HTMLElement>('[data-studio-text-id]')
+      if (studioText && beneath) {
+        selection.value = beneath
+        void beginStudioTextEdit(studioText, no())
+        return
+      }
       if (!beneath?.range && !beneath?.prop)
         return
       event.preventDefault()
@@ -235,6 +251,12 @@ export function useSelection(
       return
 
     const target = targetFrom(event.target) ?? targetFromPoint(event.clientX, event.clientY)
+    const studioText = target?.el.closest<HTMLElement>('[data-studio-text-id]')
+    if (studioText && target) {
+      selection.value = target
+      void beginStudioTextEdit(studioText, no())
+      return
+    }
     if (!target?.range && !target?.prop)
       return
     event.preventDefault()
@@ -247,6 +269,10 @@ export function useSelection(
       return
 
     if (event.key === 'Escape') {
+      if (activeText.value) {
+        endStudioTextEdit()
+        return
+      }
       // One layer at a time. A key pressed in a field belongs to that field,
       // and the inline editor closes itself, so clearing the selection here as
       // well meant cancelling an edit lost the block being edited.

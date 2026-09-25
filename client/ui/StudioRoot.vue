@@ -3,6 +3,7 @@ import type { StudioContext } from '../context'
 import { useNav } from '@slidev/client'
 import { useWindowSize } from '@vueuse/core'
 import { computed, onScopeDispose, provide, watch, watchEffect } from 'vue'
+import { endStudioTextEdit, installStudioTextSelection } from '../studiotext-editor'
 import { duplicateBlock, nudgeBlock } from '../actions'
 import { onDomEvent } from '../composables/useDomEvent'
 import { useSelection } from '../composables/useSelection'
@@ -15,6 +16,7 @@ import InlineEditor from './InlineEditor.vue'
 import SelectionLayer from './SelectionLayer.vue'
 import StudioDock from './StudioDock.vue'
 import StudioToolbar from './StudioToolbar.vue'
+import StudioTextControls from './StudioTextControls.vue'
 import '../../styles/studio.css'
 
 /**
@@ -25,6 +27,8 @@ import '../../styles/studio.css'
  * ending up in an exported slide.
  */
 const nav = useNav()
+const uninstallTextSelection = installStudioTextSelection()
+onScopeDispose(uninstallTextSelection)
 const no = computed(() => nav.currentSlideNo.value)
 
 const source = useSlideSource(no)
@@ -132,7 +136,8 @@ onDomEvent<KeyboardEvent>(document, 'keydown', (event) => {
 }, { capture: true })
 
 // Selection belongs to one slide; navigating away drops it.
-watch(no, () => (selection.value = null))
+watch(no, () => { selection.value = null; endStudioTextEdit() })
+watch(studioOpen, open => { if (!open) endStudioTextEdit() })
 
 // `useDynamicSlideInfo` fetches the slide source lazily, on first read. Touch
 // it here so the source is already in hand when the user clicks, rather than
@@ -175,6 +180,7 @@ watchEffect(() => {
       <template v-if="studioOpen">
         <SelectionLayer />
         <InlineEditor />
+        <StudioTextControls />
         <StudioDock />
       </template>
       <div v-if="lastError" class="studio-toast">

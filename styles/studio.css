@@ -950,3 +950,24 @@ html.slidev-studio-docked #page-root {
   transform-origin: 0 0;
   transition: transform 0.15s ease;
 }
+.studio-text-controls {
+  position: fixed;
+  z-index: 100;
+  right: calc(var(--studio-dock-width, 320px) + 12px);
+  top: 56px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  max-width: 430px;
+  padding: 9px 12px;
+  color: #f5f5f5;
+  background: #25252b;
+  border: 1px solid #55556a;
+  border-radius: 8px;
+  font-size: 12px;
+}
+.studio-text-controls strong { flex-basis: 100%; }
+.studio-text-controls label { display: flex; align-items: center; gap: 4px; }
+.studio-text-controls input[type="number"] { width: 58px; }
+.studio-text-controls .studio-hint { flex-basis: 100%; margin: 0; }
