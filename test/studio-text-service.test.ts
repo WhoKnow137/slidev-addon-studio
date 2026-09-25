@@ -74,6 +74,11 @@ describe('guarded StudioText transactions', () => {
     expect(noOp.noOp).toBe(true)
     expect(await read()).toBe(fixture)
     expect((await service.status(1, 'alpha', 'test-session')).canUndo).toBe(false)
+    const externallyEdited = `${fixture}\nExternal edit.\n`
+    await writeFile(path, externallyEdited)
+    await expect(command(hash(fixture))).rejects.toMatchObject({ status: 409 })
+    expect(await read()).toBe(externallyEdited)
+    expect((await service.status(1, 'alpha', 'test-session')).canUndo).toBe(false)
     const unsupported = fixture.replace('Hello world', 'Hello <SomeComponent /> world')
     await writeFile(path, unsupported)
     expect((await service.status(1, 'alpha')).reason).toContain('Unsupported nested element')
@@ -83,7 +88,7 @@ describe('guarded StudioText transactions', () => {
     const duplicate = await read()
     await expect(command(hash(duplicate))).rejects.toMatchObject({ status: 409 })
     expect(await read()).toBe(duplicate)
-    expect((await service.status(1, 'beta', 'test-session')).canUndo).toBe(false)
+    expect((await service.status(1, 'alpha', 'test-session')).canUndo).toBe(false)
   })
 
   it('makes a second identical save byte-stable and refuses invalid command values', async () => {

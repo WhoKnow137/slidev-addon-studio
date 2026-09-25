@@ -13,5 +13,10 @@
   "changedSubtreeOnly": true,
   "staleExternalEditRefusedWithZeroByteChange": true,
   "explicitReloadRequired": true,
-  "unsupportedSourceVisibleAndUnchanged": true
+  "unsupportedSourceVisibleAndUnchanged": true,
+  "genericInspectorGuard": {
+    "hint": true,
+    "oldInspector": false,
+    "handles": 0
+  }
 }

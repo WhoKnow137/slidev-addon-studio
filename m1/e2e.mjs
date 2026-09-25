@@ -75,6 +75,14 @@ try {
     await command('Input.dispatchMouseEvent', { type: 'mouseReleased', x: coordinate.x, y: coordinate.y, button: 'left', clickCount })
   }
   await waitFor(() => evaluate(`!!document.querySelector('[data-testid="studio-text-controls"]')`), 'text edit controls after double-click')
+  const genericGuard = await evaluate(`(() => {
+    const dock=document.querySelector('.studio-dock');
+    const hint=[...dock.querySelectorAll('.studio-empty')].some(el=>el.textContent.includes('StudioText v1:'));
+    const oldInspector=[...dock.querySelectorAll('.studio-section__title')].some(el=>['Position','Style','Arrange','Markdown'].includes(el.textContent.trim()));
+    const handles=document.querySelectorAll('.studio-frame .studio-move, .studio-frame .studio-handle').length;
+    return {hint,oldInspector,handles};
+  })()`)
+  assert.deepEqual(genericGuard, { hint: true, oldInspector: false, handles: 0 }, 'generic inspector and transform actions must be unavailable')
   const word = await selectWord()
   assert.deepEqual(word, { word: 'world', editable: true })
   await waitFor(() => evaluate(`document.querySelector('[data-testid="studio-text-controls"]')?.textContent?.includes('Text range selected')`), 'model range')
@@ -118,7 +126,7 @@ try {
     formattedSha256: crypto.createHash('sha256').update(formatted).digest('hex'),
     wordSelection: word, controls: true, colorAndSizeSurvivedReload: true, undoRedo: true,
     changedSubtreeOnly: true, staleExternalEditRefusedWithZeroByteChange: true, explicitReloadRequired: true,
-    unsupportedSourceVisibleAndUnchanged: true }
+    unsupportedSourceVisibleAndUnchanged: true, genericInspectorGuard: genericGuard }
   await fs.writeFile(path.join(import.meta.dirname, 'e2e-results.json'), `${JSON.stringify(result, null, 2)}\n`)
   console.log('PASS: double-click, model word range, color, size, reload, undo, redo, minimal diff')
 }
