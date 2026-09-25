@@ -192,6 +192,7 @@ function handleStyle(rect: Rect, handle: typeof handles[number]) {
 
         <div
           v-for="handle in handles"
+          v-if="!selection.el.closest('[data-studio-text-id]')"
           :key="handle.id"
           class="studio-handle"
           :style="{ left: `${handle.x * 100}%`, top: `${handle.y * 100}%`, cursor: handle.cursor }"
@@ -199,6 +200,7 @@ function handleStyle(rect: Rect, handle: typeof handles[number]) {
         />
 
         <div
+          v-if="!selection.el.closest('[data-studio-text-id]')"
           class="studio-handle studio-handle--rotate"
           style="left: 50%; top: -22px"
           title="Rotate. Hold Shift for 15° steps"

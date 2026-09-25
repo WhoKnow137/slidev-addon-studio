@@ -292,7 +292,7 @@ export function useSelection(
     if (event.key !== 'Backspace' && event.key !== 'Delete')
       return
     // Never while the user is typing into one of the editor's own fields.
-    if (isTyping(event.target) || !selection.value?.range || !remove)
+    if (isTyping(event.target) || !selection.value?.range || !remove || selection.value.el.closest('[data-studio-text-id]'))
       return
 
     // Backspace would otherwise navigate the browser back and lose the deck.

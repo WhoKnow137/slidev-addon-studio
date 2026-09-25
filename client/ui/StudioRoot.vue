@@ -11,7 +11,7 @@ import { useSlideCanvas } from '../composables/useSlideCanvas'
 import { useSlideSource } from '../composables/useSlideSource'
 import { useTransformGizmo } from '../composables/useTransformGizmo'
 import { studioContext, studioKey } from '../context'
-import { dockWidth, editing, lastError, selection, studioOpen } from '../state'
+import { dockWidth, editing, lastError, reportError, selection, studioOpen } from '../state'
 import InlineEditor from './InlineEditor.vue'
 import SelectionLayer from './SelectionLayer.vue'
 import StudioDock from './StudioDock.vue'
@@ -35,6 +35,10 @@ const source = useSlideSource(no)
 const canvas = useSlideCanvas(() => Number(source.frontmatter.value.zoom ?? 1))
 async function commit(content: string, label: string, options?: { skipHmr?: boolean, keepSelection?: boolean }) {
   const current = selection.value
+  if (current?.el.closest('[data-studio-text-id]')) {
+    reportError(new Error('StudioText source changes must use its guarded text controls or the Slidev source editor.'))
+    return
+  }
   await source.setContent(content, label, options)
 
   // Nothing re-rendered, so the element the user is holding is still the one on
