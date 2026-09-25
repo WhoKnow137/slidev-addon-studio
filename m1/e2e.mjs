@@ -84,10 +84,11 @@ try {
     const dock=document.querySelector('.studio-dock');
     const hint=!!dock.querySelector('[data-testid="typography-inspector"]');
     const oldInspector=[...dock.querySelectorAll('.studio-section__title')].some(el=>['Position','Style','Arrange','Markdown'].includes(el.textContent.trim()));
-    const handles=document.querySelectorAll('.studio-frame .studio-move, .studio-frame .studio-handle').length;
-    return {hint,oldInspector,handles};
+    const handles=document.querySelectorAll('.studio-frame .studio-move:not(.studio-text-move), .studio-frame .studio-handle:not(.studio-text-handle):not(.studio-text-rotate)').length;
+    const textHandles=document.querySelectorAll('.studio-frame .studio-text-handle').length;
+    return {hint,oldInspector,handles,textHandles};
   })()`)
-  assert.deepEqual(genericGuard, { hint: true, oldInspector: false, handles: 0 }, 'generic inspector and transform actions must be unavailable')
+  assert.deepEqual(genericGuard, { hint: true, oldInspector: false, handles: 0, textHandles: 8 }, 'generic inspector stays guarded; managed geometry handles are present')
   const word = await selectWord()
   assert.deepEqual(word, { word: 'world', editable: true })
   await waitFor(() => evaluate(`document.querySelector('[data-testid="typography-inspector"]')?.textContent?.includes('Selected text range')`), 'model range')

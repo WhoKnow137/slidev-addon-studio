@@ -3,13 +3,14 @@ import type { StudioContext } from '../context'
 import { useNav } from '@slidev/client'
 import { useWindowSize } from '@vueuse/core'
 import { computed, onScopeDispose, provide, watch, watchEffect } from 'vue'
-import { endStudioTextEdit, installStudioTextSelection } from '../studiotext-editor'
+import { activeText, endStudioTextEdit, installStudioTextSelection, studioGeometryBatchCommand, studioGeometryCommand, textSelection } from '../studiotext-editor'
 import { duplicateBlock, nudgeBlock } from '../actions'
 import { onDomEvent } from '../composables/useDomEvent'
 import { useSelection } from '../composables/useSelection'
 import { useSlideCanvas } from '../composables/useSlideCanvas'
 import { useSlideSource } from '../composables/useSlideSource'
 import { useTransformGizmo } from '../composables/useTransformGizmo'
+import { useTextGeometryGizmo } from '../composables/useTextGeometryGizmo'
 import { studioContext, studioKey } from '../context'
 import { dockWidth, editing, lastError, reportError, selection, studioOpen } from '../state'
 import InlineEditor from './InlineEditor.vue'
@@ -63,6 +64,7 @@ const gizmo = useTransformGizmo({
   commit,
   selectThrough: (x, y) => selectionApi.selectThrough(x, y),
 })
+const textGizmo = useTextGeometryGizmo(canvas)
 
 const context: StudioContext = {
   no: () => no.value,
@@ -71,6 +73,7 @@ const context: StudioContext = {
   note: () => source.note.value,
   canvas,
   gizmo,
+  textGizmo,
   commit,
   setFrontmatter: (values, label) => source.setFrontmatter(values, label),
   setNote: note => source.setNote(note),
@@ -104,6 +107,20 @@ const NUDGE_FAR = 10
 onDomEvent<KeyboardEvent>(document, 'keydown', (event) => {
   if (!studioOpen.value || editing.value)
     return
+  if (activeText.value?.document && !activeText.value.editing && textSelection.value.mode === 'objects'
+    && !activeText.value.stale && !activeText.value.document.geometry.affine) {
+    if (event.target instanceof Element && event.target.closest('input, textarea, select, [contenteditable="true"]')) return
+    const step = event.shiftKey ? 10 : 1
+    const delta: Record<string, [number, number]> = {
+      ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step],
+    }
+    if (delta[event.key] && !event.metaKey && !event.ctrlKey && !event.altKey) {
+      event.preventDefault()
+      void (textSelection.value.ids.length > 1 ? studioGeometryBatchCommand : studioGeometryCommand)
+        ({ kind: 'translate', dx: delta[event.key][0], dy: delta[event.key][1] })
+      return
+    }
+  }
   const target = selection.value
   if (!target?.range)
     return

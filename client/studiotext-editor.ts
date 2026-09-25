@@ -1,5 +1,6 @@
 import type { SourceHandle, TextDocument, TextPoint, StudioSelection } from '../shared/studiotext'
 import type { TypographyEdit } from '../shared/typography'
+import type { GeometryEdit } from '../shared/geometry'
 import { shallowRef } from 'vue'
 import { graphemes } from '../shared/studiotext'
 import { slideElement } from './dom'
@@ -139,7 +140,7 @@ async function loadStudioText(element: HTMLElement, no: number, editing: boolean
       element.setAttribute('spellcheck', 'false')
       captureStudioTextSelection()
     }
-    else textError.value = `Visual text editing unavailable: ${result.reason}`
+    else if (!result.editable) textError.value = `Visual text editing unavailable: ${result.reason}`
   }
   catch (error) {
     textError.value = error instanceof Error ? error.message : String(error)
@@ -154,8 +155,8 @@ export function endStudioTextEdit() {
   activeText.value = null
   textSelection.value = { mode: 'objects', ids: [] }
 }
-async function sendTextCommand(action: 'format' | 'typography' | 'undo' | 'redo',
-  property?: 'color' | 'fontSize', value?: string | number, edit?: TypographyEdit) {
+async function sendTextCommand(action: 'format' | 'typography' | 'geometry' | 'geometry-batch' | 'undo' | 'redo',
+  property?: 'color' | 'fontSize', value?: string | number, edit?: TypographyEdit, geometryEdit?: GeometryEdit) {
   const state = activeText.value
   if (!state || state.stale || !state.document || textBusy.value) return false
   if (action === 'format' && textSelection.value.mode !== 'textRange') { textError.value = 'Select a word or range first.'; return false }
@@ -163,7 +164,8 @@ async function sendTextCommand(action: 'format' | 'typography' | 'undo' | 'redo'
   try {
     const response = await fetch('/@studio/text', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action, no: state.no, id: state.id, session: session(), expectedRevision: state.revision,
-        selection: textSelection.value, property, value, edit }) })
+        selection: textSelection.value, property, value, edit, geometryEdit,
+        ids: textSelection.value.mode === 'objects' ? textSelection.value.ids : undefined }) })
     const result = await response.json()
     if (!response.ok) {
       textError.value = result.error ?? `Text edit failed (${response.status})`
@@ -188,6 +190,12 @@ export function studioTextCommand(action: 'format' | 'undo' | 'redo', property?:
 export function studioTypographyCommand(edit: TypographyEdit) {
   return sendTextCommand('typography', undefined, undefined, edit)
 }
+export function studioGeometryCommand(edit: GeometryEdit) {
+  return sendTextCommand('geometry', undefined, undefined, undefined, edit)
+}
+export function studioGeometryBatchCommand(edit: GeometryEdit) {
+  return sendTextCommand('geometry-batch', undefined, undefined, undefined, edit)
+}
 
 export function installStudioTextSelection() {
   const onSelection = () => { if (activeText.value) captureStudioTextSelection() }
@@ -206,7 +214,7 @@ export function installStudioTextSelection() {
   const observer = new MutationObserver(() => {
     const state = activeText.value
     const host = root()
-    if (state && host && !host.isContentEditable && state.document) {
+    if (state?.editing && host && !host.isContentEditable && state.document) {
       host.setAttribute('contenteditable', 'true')
       host.setAttribute('spellcheck', 'false')
       restoreStudioTextSelection()

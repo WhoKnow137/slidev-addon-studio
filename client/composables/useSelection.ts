@@ -191,8 +191,14 @@ export function useSelection(
     const managed = target.el.closest<HTMLElement>('[data-studio-text-id]')
     if (managed) {
       missed.value = false
-      selection.value = target
       const id = managed.dataset.studioTextId
+      if (event.shiftKey && id && activeText.value?.document && !activeText.value.editing
+        && textSelection.value.mode === 'objects' && !textSelection.value.ids.includes(id)
+        && activeText.value.no === no()) {
+        textSelection.value = { mode: 'objects', ids: [...textSelection.value.ids, id] }
+        return
+      }
+      selection.value = target
       if (id) textSelection.value = { mode: 'objects', ids: [id] }
       void inspectStudioText(managed, no())
       return

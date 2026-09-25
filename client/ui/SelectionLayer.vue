@@ -5,6 +5,7 @@ import { computed, ref } from 'vue'
 import { mappedElements } from '../dom'
 import { useStudio } from '../context'
 import { editing, hovered, outlineEnabled, selection } from '../state'
+import { activeText } from '../studiotext-editor'
 
 /**
  * Everything drawn on top of the slide: the hover outline, the selection box
@@ -102,7 +103,7 @@ const handles: { id: ResizeHandle, x: number, y: number, cursor: string }[] = [
   { id: 'w', x: 0, y: 0.5, cursor: 'ew-resize' },
 ]
 
-const guideStyles = computed(() => studio.gizmo.guides.value.map((guide) => {
+const guideStyles = computed(() => [...studio.gizmo.guides.value, ...studio.textGizmo.guides.value].map((guide) => {
   const { rect, scale } = studio.canvas
   return guide.orientation === 'vertical'
     ? {
@@ -189,6 +190,8 @@ function handleStyle(rect: Rect, handle: typeof handles[number]) {
           class="studio-move"
           @pointerdown="studio.gizmo.startMove($event)"
         />
+        <div v-if="selection.el.closest('[data-studio-text-id]') && !activeText?.editing"
+          class="studio-move studio-text-move" @pointerdown="studio.textGizmo.startMove($event)" />
 
         <div
           v-for="handle in handles"
@@ -198,6 +201,10 @@ function handleStyle(rect: Rect, handle: typeof handles[number]) {
           :style="{ left: `${handle.x * 100}%`, top: `${handle.y * 100}%`, cursor: handle.cursor }"
           @pointerdown="studio.gizmo.startResize($event, handle.id)"
         />
+        <div v-for="handle in handles" v-if="selection.el.closest('[data-studio-text-id]')"
+          :key="`text-${handle.id}`" class="studio-handle studio-text-handle"
+          :style="{ left: `${handle.x * 100}%`, top: `${handle.y * 100}%`, cursor: handle.cursor }"
+          @pointerdown="studio.textGizmo.startResize($event, handle.id)" />
 
         <div
           v-if="!selection.el.closest('[data-studio-text-id]')"
@@ -206,6 +213,9 @@ function handleStyle(rect: Rect, handle: typeof handles[number]) {
           title="Rotate. Hold Shift for 15° steps"
           @pointerdown="studio.gizmo.startRotate($event)"
         />
+        <div v-if="selection.el.closest('[data-studio-text-id]')" class="studio-handle studio-handle--rotate studio-text-rotate"
+          style="left: 50%; top: -22px" title="Rotate text. Hold Shift for 15° steps"
+          @pointerdown="studio.textGizmo.startRotate($event)" />
       </div>
     </template>
 

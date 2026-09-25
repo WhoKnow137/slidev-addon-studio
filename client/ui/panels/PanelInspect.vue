@@ -13,6 +13,7 @@ import PropField from '../parts/PropField.vue'
 import StudioField from '../parts/StudioField.vue'
 import StudioIcon from '../parts/StudioIcon.vue'
 import TypographyInspector from '../TypographyInspector.vue'
+import GeometryInspector from '../GeometryInspector.vue'
 
 /**
  * The properties panel: where the selected block lives, how it is styled, and
@@ -150,6 +151,7 @@ async function remove() {
   </div>
 
   <div v-else-if="selection?.el.closest('[data-studio-text-id]')" class="studio-managed-inspect">
+    <GeometryInspector />
     <TypographyInspector />
     <p class="studio-hint">Double click text to select words. Use Slidev’s source editor to change the words or edit unsupported markup.</p>
   </div>

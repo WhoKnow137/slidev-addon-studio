@@ -1,11 +1,13 @@
 import type { ResolvedSlidevOptions } from '@slidev/types'
 import type { SourceHandle, StudioSelection } from '../shared/studiotext'
 import type { TypographyEdit } from '../shared/typography'
+import type { GeometryEdit } from '../shared/geometry'
 import { createHash, randomUUID } from 'node:crypto'
 import { open, readFile, realpath, rename, rm } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { parseStudioText, serializeStudioText, uniqueStudioText } from '../shared/studiotext'
 import { applyTypography } from '../shared/typography'
+import { applyGeometry, patchGeometrySource } from '../shared/geometry'
 import { splitDeck } from './slide-source'
 
 export class StudioTextError extends Error {
@@ -22,11 +24,14 @@ interface HistoryEntry {
   beforeSelection?: StudioSelection
   afterSelection?: StudioSelection
   selectionOnly?: boolean
+  beforeFile?: string
+  afterFile?: string
+  ids?: string[]
 }
 interface SessionHistory { undo: HistoryEntry[], redo: HistoryEntry[] }
 const historyFlags = (history: SessionHistory | undefined, filePath: string, id: string) => ({
-  canUndo: history?.undo.at(-1)?.filePath === filePath && history.undo.at(-1)?.textId === id,
-  canRedo: history?.redo.at(-1)?.filePath === filePath && history.redo.at(-1)?.textId === id,
+  canUndo: history?.undo.at(-1)?.filePath === filePath && (history.undo.at(-1)?.ids?.includes(id) ?? history.undo.at(-1)?.textId === id),
+  canRedo: history?.redo.at(-1)?.filePath === filePath && (history.redo.at(-1)?.ids?.includes(id) ?? history.redo.at(-1)?.textId === id),
 })
 const sha = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex')
 
@@ -132,8 +137,23 @@ export class StudioTextService {
     return { noOp: false, revision: sha(candidate) }
   }
 
+  private async replaceWhole(filePath: string, expectedRevision: string, candidate: Buffer) {
+    const temp = join(dirname(filePath), `.studio-text-${randomUUID()}.tmp`)
+    let handle: Awaited<ReturnType<typeof open>> | null = null
+    try {
+      handle = await open(temp, 'wx')
+      await handle.writeFile(candidate)
+      await handle.sync()
+      await handle.close(); handle = null
+      if (sha(await readFile(filePath)) !== expectedRevision) throw new StudioTextError('stale-source-revision', 409)
+      await rename(temp, filePath)
+    }
+    finally { if (handle) await handle.close(); await rm(temp, { force: true }) }
+    return { noOp: false, revision: sha(candidate) }
+  }
+
   async command(payload: {
-    action: 'format' | 'typography' | 'undo' | 'redo'
+    action: 'format' | 'typography' | 'geometry' | 'geometry-batch' | 'undo' | 'redo'
     no: number
     id: string
     session: string
@@ -142,6 +162,8 @@ export class StudioTextService {
     property?: 'color' | 'fontSize'
     value?: string | number
     edit?: TypographyEdit
+    geometryEdit?: GeometryEdit
+    ids?: string[]
   }) {
     if (typeof payload.session !== 'string' || !/^[a-zA-Z0-9-]{8,100}$/.test(payload.session)) throw new StudioTextError('Invalid editor session')
     if (typeof payload.expectedRevision !== 'string' || !/^[0-9a-f]{64}$/.test(payload.expectedRevision)) throw new StudioTextError('Missing source revision')
@@ -155,6 +177,68 @@ export class StudioTextService {
       if (!parsed.ok) throw new StudioTextError(`Visual text editing unavailable: ${parsed.reason}`, 422)
       const history = this.history.get(payload.session) ?? { undo: [], redo: [] }
       this.history.set(payload.session, history)
+      if (payload.action === 'geometry-batch') {
+        const ids = payload.ids
+        const edit = payload.geometryEdit
+        if (!ids || ids.length < 2 || ids.length > 20 || new Set(ids).size !== ids.length
+          || ids[0] !== payload.id || payload.selection?.mode !== 'objects'
+          || JSON.stringify(ids) !== JSON.stringify(payload.selection.ids)) throw new StudioTextError('Select 2–20 distinct managed text objects on one slide')
+        if (!edit || !((edit.kind === 'translate') || (edit.kind === 'set' && ['x', 'y'].includes(edit.property))))
+          throw new StudioTextError('Multi-object geometry supports translation and X/Y only')
+        const patches: { start: number, end: number, replacement: string }[] = []
+        let firstDocument = parsed.document
+        for (const id of ids) {
+          const item = this.inspect(beforeSource, ref.sourceIndex, id)
+          if (!item.parsed.ok) throw new StudioTextError(`Visual geometry unavailable for ${id}: ${item.parsed.reason}`, 422)
+          let changed
+          try { changed = applyGeometry(item.parsed.document, edit) }
+          catch (error) { throw new StudioTextError((error as Error).message, 422) }
+          if (id === payload.id) firstDocument = changed
+          patches.push({ start: item.span.start, end: item.span.end,
+            replacement: patchGeometrySource(item.span.source, item.parsed.document, changed) })
+        }
+        if (patches.every(patch => patch.replacement === beforeSource.slice(patch.start, patch.end)))
+          return { ok: true, noOp: true, revision, ...historyFlags(history, ref.filePath, payload.id),
+            selection: payload.selection, document: parsed.document }
+        let candidate = beforeSource
+        for (const patch of patches.sort((a, b) => b.start - a.start))
+          candidate = candidate.slice(0, patch.start) + patch.replacement + candidate.slice(patch.end)
+        for (const id of ids) {
+          const item = this.inspect(candidate, ref.sourceIndex, id)
+          if (!item.parsed.ok) throw new StudioTextError(`Candidate geometry invalid for ${id}`, 422)
+        }
+        const outcome = await this.replaceWhole(ref.filePath, revision, Buffer.from(candidate, 'utf8'))
+        history.undo.push({ label: `Move ${ids.length} text objects`, filePath: ref.filePath, textId: payload.id, ids,
+          beforeRevision: revision, afterRevision: outcome.revision, beforeSource: span.source,
+          afterSource: this.inspect(candidate, ref.sourceIndex, payload.id).span.source,
+          beforeFile: beforeSource, afterFile: candidate,
+          beforeSelection: payload.selection, afterSelection: payload.selection })
+        history.redo = []
+        return { ok: true, ...outcome, ...historyFlags(history, ref.filePath, payload.id),
+          selection: payload.selection, document: firstDocument }
+      }
+      if (payload.action === 'geometry') {
+        if (!payload.selection || (payload.selection.mode === 'objects'
+          ? payload.selection.ids.length !== 1 || payload.selection.ids[0] !== payload.id
+          : payload.selection.textId !== payload.id)) throw new StudioTextError('Select this StudioText before changing geometry')
+        if (!payload.geometryEdit || typeof payload.geometryEdit !== 'object') throw new StudioTextError('Missing geometry edit')
+        let changed
+        try { changed = applyGeometry(parsed.document, payload.geometryEdit) }
+        catch (error) { throw new StudioTextError((error as Error).message, 422) }
+        if (changed === parsed.document) return { ok: true, noOp: true, revision,
+          ...historyFlags(history, ref.filePath, payload.id), selection: payload.selection, document: parsed.document }
+        const replacement = payload.geometryEdit.kind === 'scale'
+          ? serializeStudioText(changed) : patchGeometrySource(span.source, parsed.document, changed)
+        const outcome = await this.replace(ref, revision, payload.id, replacement, before, beforeSource, span)
+        if (!outcome.noOp) {
+          history.undo.push({ label: `Change text geometry: ${payload.geometryEdit.kind}`, filePath: ref.filePath, textId: payload.id,
+            beforeRevision: revision, afterRevision: outcome.revision, beforeSource: span.source, afterSource: replacement,
+            beforeSelection: payload.selection, afterSelection: payload.selection })
+          history.redo = []
+        }
+        return { ok: true, ...outcome, ...historyFlags(history, ref.filePath, payload.id),
+          selection: payload.selection, document: changed }
+      }
       if (payload.action === 'format' || payload.action === 'typography') {
         if (!payload.selection) throw new StudioTextError('Select this StudioText before formatting')
         if (payload.action === 'format' && (payload.selection.mode !== 'textRange' || !['color', 'fontSize'].includes(String(payload.property))))
@@ -191,11 +275,32 @@ export class StudioTextService {
       const from = payload.action === 'undo' ? history.undo : history.redo
       const to = payload.action === 'undo' ? history.redo : history.undo
       const entry = from.at(-1)
-      if (!entry || entry.filePath !== ref.filePath || entry.textId !== payload.id) throw new StudioTextError('No matching text transaction', 409)
+      if (!entry || entry.filePath !== ref.filePath
+        || !(entry.ids?.includes(payload.id) ?? entry.textId === payload.id))
+        throw new StudioTextError('No matching text transaction', 409)
       const guardedRevision = payload.action === 'undo' ? entry.afterRevision : entry.beforeRevision
       const guardedSource = payload.action === 'undo' ? entry.afterSource : entry.beforeSource
       const replacement = payload.action === 'undo' ? entry.beforeSource : entry.afterSource
-      if (revision !== guardedRevision || span.source !== guardedSource) throw new StudioTextError('stale-text-history', 409)
+      if (revision !== guardedRevision || (entry.beforeFile === undefined && span.source !== guardedSource))
+        throw new StudioTextError('stale-text-history', 409)
+      if (entry.beforeFile !== undefined && entry.afterFile !== undefined) {
+        const expected = payload.action === 'undo' ? entry.afterFile : entry.beforeFile
+        const next = payload.action === 'undo' ? entry.beforeFile : entry.afterFile
+        if (beforeSource !== expected) throw new StudioTextError('stale-text-history', 409)
+        for (const id of entry.ids ?? []) {
+          const item = this.inspect(next, ref.sourceIndex, id)
+          if (!item.parsed.ok) throw new StudioTextError(`History candidate invalid for ${id}`, 422)
+        }
+        const outcome = await this.replaceWhole(ref.filePath, revision, Buffer.from(next, 'utf8'))
+        from.pop()
+        if (payload.action === 'undo') entry.beforeRevision = outcome.revision
+        else entry.afterRevision = outcome.revision
+        to.push(entry)
+        const restored = this.inspect(next, ref.sourceIndex, payload.id).parsed
+        return { ok: true, ...outcome, ...historyFlags(history, ref.filePath, payload.id),
+          selection: payload.action === 'undo' ? entry.beforeSelection : entry.afterSelection,
+          document: restored.ok ? restored.document : parsed.document }
+      }
       if (entry.selectionOnly) {
         from.pop()
         to.push(entry)

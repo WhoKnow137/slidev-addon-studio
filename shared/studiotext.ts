@@ -62,7 +62,7 @@ export interface SourceHandle {
 }
 export type ParseResult = { ok: true, document: TextDocument } | { ok: false, reason: string }
 
-const textAttrs = new Set(['version', 'id', 'pos', 'resize', 'rotate', 'font-family', 'font-size', 'font-weight', 'font-style', 'color', 'line-height', 'letter-spacing', 'decoration', 'text-case', 'align', 'vertical-align', 'style-ref'])
+const textAttrs = new Set(['version', 'id', 'pos', 'resize', 'rotate', 'max-width', 'affine', 'font-family', 'font-size', 'font-weight', 'font-style', 'color', 'line-height', 'letter-spacing', 'decoration', 'text-case', 'align', 'vertical-align', 'style-ref'])
 const runAttrs = new Set(['font-family', 'font-size', 'font-weight', 'font-style', 'color', 'line-height', 'letter-spacing', 'decoration', 'text-case', 'link'])
 const paragraphAttrs = new Set(['align'])
 const numericAttrs = new Set(['rotate', 'font-size', 'font-weight', 'letter-spacing'])
@@ -218,6 +218,13 @@ export function parseStudioText(source: string): ParseResult {
     if (x === null || y === null || [x, y, width, height].some(value => value !== null && !Number.isFinite(value))) fail('Invalid pos')
     const resize = values.resize
     if (!['auto-width', 'auto-height', 'fixed'].includes(String(resize))) fail('Invalid resize mode')
+    if (resize === 'auto-width' && (width !== null || height !== null)) fail('Auto Width requires auto width and height')
+    if (resize === 'auto-height' && (width === null || width <= 0 || height !== null)) fail('Auto Height requires fixed width and auto height')
+    if (resize === 'fixed' && (width === null || width <= 0 || height === null || height <= 0)) fail('Fixed Size requires positive width and height')
+    const maxWidth = values['max-width'] === undefined ? undefined : number(values['max-width'], 'max-width', Number.NaN)
+    if (maxWidth !== undefined && (!Number.isFinite(maxWidth) || maxWidth <= 0 || resize !== 'auto-width')) fail('Invalid max-width')
+    const affineParts = values.affine === undefined ? undefined : String(values.affine).split(',').map(Number)
+    if (affineParts && (affineParts.length !== 6 || affineParts.some(value => !Number.isFinite(value)))) fail('Invalid affine')
     const align = string(values.align, 'left')
     if (!['left', 'center', 'right', 'justify'].includes(align)) fail('Invalid align')
     const verticalAlign = string(values['vertical-align'], 'top')
@@ -240,7 +247,9 @@ export function parseStudioText(source: string): ParseResult {
     const document: TextDocument = {
       version: 1, id: String(values.id),
       paragraphs, defaults: { ...defaultStyle, ...styleAttrs(values) },
-      geometry: { x: x as number, y: y as number, width, height, rotationDeg: number(values.rotate, 'rotate', 0) },
+      geometry: { x: x as number, y: y as number, width, height, rotationDeg: number(values.rotate, 'rotate', 0),
+        ...(maxWidth === undefined ? {} : { maxWidth }),
+        ...(affineParts === undefined ? {} : { affine: affineParts as TextGeometry['affine'] }) },
       resizeMode: resize as ResizeMode,
       verticalAlign: verticalAlign as TextDocument['verticalAlign'],
       align: align as TextDocument['align'],
@@ -348,7 +357,10 @@ export function serializeStudioText(input: TextDocument): string {
   const { geometry: g, defaults: d } = doc
   const pos = [n(g.x), n(g.y), g.width === null ? 'auto' : n(g.width), g.height === null ? 'auto' : n(g.height)].join(',')
   const attributes = [
-    `version="1"`, `id="${escapeAttr(doc.id)}"`, `pos="${pos}"`, `resize="${doc.resizeMode}"`, `:rotate="${n(g.rotationDeg)}"`,
+    `version="1"`, `id="${escapeAttr(doc.id)}"`, `pos="${pos}"`, `resize="${doc.resizeMode}"`,
+    g.rotationDeg < 0 ? `rotate="${n(g.rotationDeg)}"` : `:rotate="${n(g.rotationDeg)}"`,
+    ...(g.maxWidth === undefined ? [] : [`max-width="${n(g.maxWidth)}"`]),
+    ...(g.affine === undefined ? [] : [`affine="${g.affine.map(n).join(',')}"`]),
     `font-family="${escapeAttr(d.fontFamily)}"`, `:font-size="${n(d.fontSize)}"`, `font-weight="${n(d.fontWeight)}"`,
     `font-style="${d.fontStyle}"`, `color="${escapeAttr(d.color)}"`, `line-height="${escapeAttr(String(d.lineHeight))}"`,
     `letter-spacing="${escapeAttr(String(d.letterSpacing))}"`,

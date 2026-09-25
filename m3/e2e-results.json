@@ -1,0 +1,20 @@
+{
+  "gate": "PASS",
+  "numeric": true,
+  "resizeVsScale": true,
+  "autoMode": true,
+  "rotatedMoveResizeText": true,
+  "browserZoomFactors": [
+    0.5,
+    1,
+    2
+  ],
+  "multiObject": true,
+  "pointerRotation": true,
+  "staleGesture": true,
+  "snapGuideAndAlt": true,
+  "autoHeightFontRemeasure": true,
+  "fixedOverflow": true,
+  "caretArrowIsNotNudge": true,
+  "originalSha256": "76aff88a5407711861be92a49241572cb1aa7c46f1507842e83c2de7e93806cf"
+}

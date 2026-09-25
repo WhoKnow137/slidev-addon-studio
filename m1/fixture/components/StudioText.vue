@@ -6,7 +6,9 @@ const props = defineProps<{
   id: string
   pos: string
   resize: 'auto-width' | 'auto-height' | 'fixed'
-  rotate?: number
+  maxWidth?: number | string
+  affine?: string
+  rotate?: number | string
   fontFamily?: string
   fontSize?: number
   fontWeight?: number | string
@@ -33,7 +35,9 @@ const style = computed(() => {
     left: `${x}px`, top: `${y}px`,
     width: width === 'auto' ? 'max-content' : `${width}px`,
     height: height === 'auto' ? 'auto' : `${height}px`,
-    transform: `rotate(${props.rotate ?? 0}deg)`,
+    maxWidth: props.maxWidth == null ? undefined : `${props.maxWidth}px`,
+    overflow: 'visible' as const,
+    transform: `${props.affine ? `matrix(${props.affine}) ` : ''}rotate(${Number(props.rotate ?? 0)}deg)`,
     fontFamily: props.fontFamily ?? 'sans-serif',
     fontSize: `${props.fontSize ?? 32}px`,
     fontWeight: props.fontWeight,
@@ -43,11 +47,11 @@ const style = computed(() => {
     letterSpacing: props.letterSpacing,
     textTransform: props.textCase ?? 'none',
     textAlign: props.align as any,
-    whiteSpace: 'pre-wrap' as const,
+    whiteSpace: props.resize === 'auto-width' && props.maxWidth == null ? 'pre' as const : 'pre-wrap' as const,
   }
 })
 </script>
 
 <template>
-  <div class="studio-text-v1" :data-studio-text-id="id" :data-studio-text-version="version" :data-resize="resize" :style="style"><div class="studio-text-content"><DecoratedContent :decoration="decoration ?? 'none'"><slot /></DecoratedContent></div></div>
+  <div class="studio-text-v1" :data-studio-text-id="id" :data-studio-text-version="version" :data-studio-text-pos="pos" :data-resize="resize" :style="style"><div class="studio-text-content"><DecoratedContent :decoration="decoration ?? 'none'"><slot /></DecoratedContent></div></div>
 </template>
