@@ -143,6 +143,7 @@ export async function buildFontCatalog(options: Pick<ResolvedSlidevOptions, 'use
       openTypeFeatures: features.length ? features : previous?.openTypeFeatures ?? [], metadataSource: 'public/studio-fonts.json' })
   }
   const order = { project: 0, web: 1, system: 2 }
+  for (const font of byFamily.values()) font.styles = [...new Map(font.styles.map(face => [`${face.weight}/${face.style}/${face.stretch ?? ''}`, face])).values()]
   const catalog: FontCatalog = { version: 1, fonts: [...byFamily.values()].sort((a, b) =>
     order[a.source] - order[b.source] || a.family.localeCompare(b.family)) }
   cache.set(root, { signature: token, catalog })

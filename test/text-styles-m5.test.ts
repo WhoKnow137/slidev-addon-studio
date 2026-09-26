@@ -30,6 +30,17 @@ beforeEach(async () => {
 afterEach(async () => rm(dir, { recursive: true, force: true }))
 
 describe('M5 shared text styles', () => {
+  it('refuses object-style links rather than silently losing range-only semantics', () => {
+    expect(() => parseTextStyles({ version: 1, styles: [{ ...hero, character: { link: 'https://example.com' } }] })).toThrow('Unsupported character style: link')
+  })
+  it('clears removed inherited settings while preserving explicit local settings', () => {
+    const parsed = parseStudioText(markup('one'))
+    if (!parsed.ok) throw Error(parsed.reason)
+    const attached = applyTextStyle(parsed.document, hero.id, parseTextStyles({ version: 1, styles: [{ ...hero, character: { fontFamily: 'Inter', fontWeight: 700, fontAxes: { wght: 620 } } }] }))
+    const changed = resolveTextStyle(attached, parseTextStyles({ version: 1, styles: [{ ...hero, character: {} }] }))
+    expect(changed.defaults.fontWeight).toBe(400)
+    expect(changed.defaults.fontAxes).toBeUndefined()
+  })
   it('serializes equivalent resource maps in the same order', () => {
     const a = { version: 1 as const, styles: [{ ...hero, character: { fontFamily: 'Inter', fontSize: 32 }, paragraph: { indent: 2, spacingAfter: 4 } }] }
     const b = { version: 1 as const, styles: [{ ...hero, character: { fontSize: 32, fontFamily: 'Inter' }, paragraph: { spacingAfter: 4, indent: 2 } }] }

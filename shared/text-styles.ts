@@ -1,5 +1,5 @@
 import type { CharacterStyle, ParagraphStyle, TextDocument } from './studiotext'
-import { defaultStyle, validateCharacterValue, validateLink, validateTagMap } from './studiotext'
+import { defaultStyle, validateCharacterValue, validateTagMap } from './studiotext'
 
 export interface StudioTextStyle {
   id: string
@@ -9,7 +9,7 @@ export interface StudioTextStyle {
 }
 export interface StudioTextStyleFile { version: 1, styles: StudioTextStyle[] }
 export const EMPTY_TEXT_STYLES: StudioTextStyleFile = { version: 1, styles: [] }
-const characterKeys = new Set(['fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'color', 'lineHeight', 'letterSpacing', 'decoration', 'textCase', 'link', 'fontAxes', 'openType'])
+const characterKeys = new Set(['fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'color', 'lineHeight', 'letterSpacing', 'decoration', 'textCase', 'fontAxes', 'openType'])
 const paragraphKeys = new Set(['align', 'spacingBefore', 'spacingAfter', 'indent', 'firstLineIndent', 'direction', 'list'])
 function validateCharacter(input: unknown): Partial<CharacterStyle> {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw Error('Invalid style character')
@@ -17,7 +17,6 @@ function validateCharacter(input: unknown): Partial<CharacterStyle> {
   for (const [key, value] of Object.entries(input).sort(([a], [b]) => a.localeCompare(b))) {
     if (!characterKeys.has(key)) throw Error(`Unsupported character style: ${key}`)
     if (key === 'fontAxes' || key === 'openType') (result as any)[key] = validateTagMap(key, value)
-    else if (key === 'link') result.link = validateLink(value)
     else (result as any)[key] = validateCharacterValue(key as any, value)
   }
   return result
@@ -71,11 +70,11 @@ export function resolveTextStyle(document: TextDocument, file: StudioTextStyleFi
   const copy = structuredClone(document)
   copy.localDefaults ??= {}
   copy.localParagraphs ??= copy.paragraphs.map(p => ({ ...p.properties }))
-  copy.defaults = { ...copy.defaults, ...style.character, ...copy.localDefaults,
+  copy.defaults = { ...defaultStyle, ...style.character, ...copy.localDefaults,
     fontAxes: style.character.fontAxes || copy.localDefaults.fontAxes
-      ? { ...style.character.fontAxes, ...copy.localDefaults.fontAxes } : copy.defaults.fontAxes,
+      ? { ...style.character.fontAxes, ...copy.localDefaults.fontAxes } : undefined,
     openType: style.character.openType || copy.localDefaults.openType
-      ? { ...style.character.openType, ...copy.localDefaults.openType } : copy.defaults.openType }
+      ? { ...style.character.openType, ...copy.localDefaults.openType } : undefined }
   copy.paragraphs.forEach((paragraph, index) => {
     paragraph.properties = { ...style.paragraph, ...copy.localParagraphs![index] }
   })
