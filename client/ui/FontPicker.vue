@@ -24,6 +24,9 @@ function preview(family: string) { emit('preview', family) }
 function choose(family: string) { close(); emit('select', family) }
 function keydown(event: KeyboardEvent) {
   if (event.key === 'Escape') { event.preventDefault(); close(); return }
+  // Buttons have their own keyboard activation. Enter on Cancel must not
+  // also select the highlighted font through this bubbling handler.
+  if (!(event.target instanceof HTMLInputElement)) return
   if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
     event.preventDefault()
     active.value = Math.max(0, Math.min(candidates.value.length - 1, active.value + (event.key === 'ArrowDown' ? 1 : -1)))
