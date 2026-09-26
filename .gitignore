@@ -4,3 +4,4 @@ dist
 *.log
 .vite
 .npmrc
+m5/fixture/m5-build-*/

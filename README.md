@@ -440,3 +440,31 @@ being copied once at install time.
 ## License
 
 MIT
+
+## Managed text: M5 typography
+
+`StudioText version="1"` uses typed source properties, stable IDs, grapheme selections and revision-guarded source transactions. Double click a text object (or select it and use **Edit text**) to edit words and select ranges. The typography inspector supports font search/preview, real font faces, arbitrary variable axes, inspected OpenType features, named shared styles, paragraph spacing/indents/lists/direction, and links. Object font replacement and selected-range replacement are supported; multi-object/deck-wide font replacement and shared-style deletion are deferred.
+
+Font metadata comes from installed `@fontsource` / `@fontsource-variable` packages and actual font tables under `public/fonts`. Indexing is cached until package locks, project font metadata, or local font files change. Project resources take priority over configured web fonts, then detected system fonts. Browser Local Font Access is optional and requires the user's browser permission; manual family entry remains available. Neither discovery nor replacement copies system font binaries.
+
+Configure additional known font metadata in `public/studio-fonts.json`:
+
+```json
+{"version":1,"fonts":[{"family":"My Web Font","source":"web","styles":[{"weight":400,"style":"normal"}]}]}
+```
+
+Font loading remains explicit: supply the matching CSS `@font-face` or project stylesheet. The picker never constructs an internet request from a typed family name. Bundled fonts without an existing CSS face need a project `@font-face` declaration too. Missing/unavailable families stay in source and render using the browser fallback; replacement is an explicit action. Font loading is cached; preview waits for `FontFaceSet.load` or a bounded timeout. Browser intrinsic measurement continues to control Auto Width/Height; changing a font does not freeze source dimensions.
+
+Additional source grammar:
+
+```vue
+<StudioText version="1" id="example" pos="0,0,400,auto" resize="auto-height" style-ref="heading/hero" font-axes="{&quot;wght&quot;:620}" open-type="{&quot;tnum&quot;:true}"><StudioParagraph spacing-before="4" spacing-after="16" indent="24" first-line-indent="-8" list-kind="ordered" list-level="1" direction="rtl"><StudioRun link="https://example.com">Linked text</StudioRun></StudioParagraph></StudioText>
+```
+
+Shared styles live in the versioned, human-readable `public/studio-text-styles.json`. Cascade: shared style → object local defaults → paragraph properties → character run overrides → caret typing style. Applying/detaching a style changes one text object in one transaction. Definition edits use a separate serialized, revision-guarded resource history; **Undo style** operates on that history. Detaching materializes the effective values and preserves appearance. Figma style IDs are not automatically mapped to these resources.
+
+Paragraph measurements are CSS/slide pixels. List levels 0–12 add 24px per level; numbered lists have separate counters per level, reset by deeper/ordinary paragraph boundaries. Markers are rendered semantics, not inserted characters. Changing list kind preserves each paragraph's indentation. Character range formatting affects selected graphemes only; paragraph controls apply to every intersected paragraph. Links accept HTTP(S), mailto, `#` anchors and project-relative `/` paths; unsafe schemes are refused. RTL uses HTML `dir` and browser bidi layout while source order remains logical.
+
+Font hover and axis movement are temporary previews with no source/history write. An axis gesture captures the source revision and selection; commit is refused if either changed. IME intermediates are buffered and the final composition is one typed transaction. The public fixture simulates Japanese, Chinese Pinyin and Korean events; actual OS IME testing remains a manual platform check.
+
+Public regression fixture: `slidev m5/fixture/slides.md --port 3316`; plain runtime fixture: `slidev build m5/fixture/slides-plain.md`. Fixture font licenses are included beside their binaries. No private deck material belongs in this repository.

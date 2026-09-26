@@ -6,6 +6,8 @@ import { readPalette } from './palette'
 import { assetRoot, listAssets, saveAsset } from './assets'
 import { applyDeckAction } from './deck'
 import { StudioTextService } from './studio-text-service'
+import { buildFontCatalog } from './font-catalog'
+import { TextStyleService } from './text-style-service'
 
 const VIRTUAL_CATALOG = 'virtual:slidev-studio/catalog'
 const RESOLVED_CATALOG = `\0${VIRTUAL_CATALOG}`
@@ -25,6 +27,7 @@ const STUDIO_BLOCK_REQUEST = /[?&]vue&type=studio\b/
  */
 export function studioPlugin(options: ResolvedSlidevOptions): Plugin {
   const studioText = new StudioTextService(options)
+  const textStyles = new TextStyleService(options)
 
   const isDev = options.mode === 'dev' && options.data.config.editor !== false
   const config = studioConfig(options)
@@ -86,7 +89,7 @@ export function studioPlugin(options: ResolvedSlidevOptions): Plugin {
 
         const route = url.slice(API_PREFIX.length)
         try {
-          const result = await handle(route, req.method ?? 'GET', req, options, studioText)
+          const result = await handle(route, req.method ?? 'GET', req, options, studioText, textStyles)
           if (result === undefined)
             return next()
 
@@ -98,6 +101,8 @@ export function studioPlugin(options: ResolvedSlidevOptions): Plugin {
           if (route === 'deck' && req.method === 'POST') {
             setTimeout(() => server.hot.send({ type: 'full-reload' }), 150)
           }
+          if (route === 'text-styles' && req.method === 'POST')
+            setTimeout(() => server.hot.send({ type: 'custom', event: 'studio-text-styles-updated' }), 50)
 
           res.statusCode = 200
           res.setHeader('Content-Type', 'application/json')
@@ -128,7 +133,8 @@ export function studioPlugin(options: ResolvedSlidevOptions): Plugin {
   }
 }
 
-async function handle(route: string, method: string, req: any, options: ResolvedSlidevOptions, studioText: StudioTextService) {
+async function handle(route: string, method: string, req: any, options: ResolvedSlidevOptions,
+  studioText: StudioTextService, textStyles: TextStyleService) {
   if (route === 'text' && method === 'GET') {
     const query = new URL(req.url ?? '/', 'http://localhost').searchParams
     return await studioText.status(Number(query.get('no')), query.get('id') ?? '', query.get('session') ?? undefined)
@@ -139,6 +145,16 @@ async function handle(route: string, method: string, req: any, options: Resolved
 
   if (route === 'catalog' && method === 'GET')
     return { ...await buildCatalog(options), palette: await readPalette(options) }
+
+  if (route === 'fonts' && method === 'GET')
+    return await buildFontCatalog(options)
+
+  if (route === 'text-styles' && method === 'GET') {
+    const query = new URL(req.url ?? '/', 'http://localhost').searchParams
+    return await textStyles.status(query.get('session') ?? undefined)
+  }
+  if (route === 'text-styles' && method === 'POST')
+    return await textStyles.command(await readLimitedJson(req))
 
   if (route === 'assets' && method === 'GET')
     return { assets: await listAssets(options), root: assetRoot(options) }

@@ -2,7 +2,9 @@ import type { SourceHandle, TextDocument, TextPoint, StudioSelection } from '../
 import type { TypographyEdit } from '../shared/typography'
 import type { GeometryEdit } from '../shared/geometry'
 import { shallowRef } from 'vue'
-import { graphemes } from '../shared/studiotext'
+import { graphemes, orderedRange } from '../shared/studiotext'
+import { replaceText } from '../shared/text-content'
+import { TextCompositionBuffer } from '../shared/composition'
 import { slideElement } from './dom'
 import { reportError } from './state'
 
@@ -147,6 +149,56 @@ async function loadStudioText(element: HTMLElement, no: number, editing: boolean
     reportError(error)
   }
 }
+
+/** Temporary DOM-only typography preview. The source model and history stay untouched. */
+export function previewStudioTextRange(property: 'fontFamily' | 'fontVariationSettings', value: string): (() => void) | null {
+  const host = root()
+  const logical = textSelection.value
+  if (!host || logical.mode !== 'textRange' || logical.textId !== activeText.value?.id) return null
+  const [lo, hi] = orderedRange(logical)
+  const start = endpoint(host, lo), end = endpoint(host, hi)
+  if (!start || !end) return null
+  const range = document.createRange()
+  range.setStart(start.node, start.offset)
+  range.setEnd(end.node, end.offset)
+  const segments: { original: Text, before: string, lo: number, hi: number }[] = []
+  const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT)
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (!(node instanceof Text) || !range.intersectsNode(node)) continue
+    const first = node === start.node ? start.offset : 0
+    const last = node === end.node ? end.offset : node.length
+    if (last > first) segments.push({ original: node, before: node.textContent ?? '', lo: first, hi: last })
+  }
+  if (!segments.length) return null
+  const wrappers: { original: Text, before: string, lo: number, after: Text | null, wrapper: HTMLSpanElement }[] = []
+  for (const segment of segments.reverse()) {
+    const { original, before, lo: from, hi: to } = segment
+    const selected = from ? original.splitText(from) : original
+    const after = to - from < selected.length ? selected.splitText(to - from) : null
+    const wrapper = document.createElement('span')
+    wrapper.dataset.studioTextPreview = ''
+    if (property === 'fontVariationSettings') {
+      const inherited = getComputedStyle(selected.parentElement!).fontVariationSettings
+      const settings = new Map([...inherited.matchAll(/"([A-Za-z0-9]{4})"\s+(-?[\d.]+)/g)].map(match => [match[1], match[2]]))
+      for (const match of value.matchAll(/"([A-Za-z0-9]{4})"\s+(-?[\d.]+)/g)) settings.set(match[1], match[2])
+      wrapper.style.fontVariationSettings = [...settings].sort(([a], [b]) => a.localeCompare(b)).map(([tag, number]) => `"${tag}" ${number}`).join(', ')
+    }
+    else wrapper.style[property] = value
+    selected.parentNode!.insertBefore(wrapper, selected)
+    wrapper.appendChild(selected)
+    wrappers.push({ original, before, lo: from, after, wrapper })
+  }
+  restoreStudioTextSelection()
+  return () => {
+    for (const { original, before, lo: from, after, wrapper } of wrappers.reverse()) {
+      if (!wrapper.isConnected) continue
+      if (from) { original.textContent = before; wrapper.remove() }
+      else { wrapper.replaceWith(original); original.textContent = before }
+      after?.remove()
+    }
+    restoreStudioTextSelection()
+  }
+}
 export function inspectStudioText(element: HTMLElement, no: number) { return loadStudioText(element, no, false) }
 export function beginStudioTextEdit(element: HTMLElement, no: number) { return loadStudioText(element, no, true) }
 export function endStudioTextEdit() {
@@ -155,8 +207,9 @@ export function endStudioTextEdit() {
   activeText.value = null
   textSelection.value = { mode: 'objects', ids: [] }
 }
-async function sendTextCommand(action: 'format' | 'typography' | 'geometry' | 'geometry-batch' | 'undo' | 'redo',
-  property?: 'color' | 'fontSize', value?: string | number, edit?: TypographyEdit, geometryEdit?: GeometryEdit) {
+async function sendTextCommand(action: 'format' | 'typography' | 'geometry' | 'geometry-batch' | 'style' | 'content' | 'undo' | 'redo',
+  property?: 'color' | 'fontSize', value?: string | number, edit?: TypographyEdit, geometryEdit?: GeometryEdit,
+  styleEdit?: { kind: 'apply', id: string } | { kind: 'detach' }, content?: string, selected?: StudioSelection) {
   const state = activeText.value
   if (!state || state.stale || !state.document || textBusy.value) return false
   if (action === 'format' && textSelection.value.mode !== 'textRange') { textError.value = 'Select a word or range first.'; return false }
@@ -164,7 +217,7 @@ async function sendTextCommand(action: 'format' | 'typography' | 'geometry' | 'g
   try {
     const response = await fetch('/@studio/text', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action, no: state.no, id: state.id, session: session(), expectedRevision: state.revision,
-        selection: textSelection.value, property, value, edit, geometryEdit,
+        selection: selected ?? textSelection.value, property, value, edit, geometryEdit, styleEdit, content,
         ids: textSelection.value.mode === 'objects' ? textSelection.value.ids : undefined }) })
     const result = await response.json()
     if (!response.ok) {
@@ -190,6 +243,35 @@ export function studioTextCommand(action: 'format' | 'undo' | 'redo', property?:
 export function studioTypographyCommand(edit: TypographyEdit) {
   return sendTextCommand('typography', undefined, undefined, edit)
 }
+/** Guard a continuous preview against the revision at gesture start. */
+export async function commitTypographyPreview(edit: TypographyEdit, id: string, revision: string, selection: StudioSelection) {
+  const state = activeText.value
+  if (!state || state.id !== id || state.revision !== revision || JSON.stringify(textSelection.value) !== JSON.stringify(selection)) {
+    textError.value = 'Text or selection changed during preview. Reload before editing.'
+    return false
+  }
+  // sendTextCommand transmits the captured revision; disk changes are also refused by the service.
+  return sendTextCommand('typography', undefined, undefined, edit, undefined, undefined, undefined, selection)
+}
+export function studioStyleCommand(styleEdit: { kind: 'apply', id: string } | { kind: 'detach' }) {
+  return sendTextCommand('style', undefined, undefined, undefined, undefined, styleEdit)
+}
+export function studioContentCommand(content: string, selection: StudioSelection) {
+  return sendTextCommand('content', undefined, undefined, undefined, undefined, undefined, content, selection)
+}
+export async function refreshStudioText() {
+  const state = activeText.value
+  if (!state) return
+  try {
+    const response = await fetch(`/@studio/text?no=${state.no}&id=${encodeURIComponent(state.id)}&session=${session()}`)
+    const result = await response.json()
+    if (!response.ok) throw Error(result.error ?? 'Text refresh failed')
+    activeText.value = { ...state, document: result.document, reason: result.reason,
+      handle: result.handle, revision: result.handle.expectedRevision,
+      canUndo: result.canUndo, canRedo: result.canRedo }
+  }
+  catch (error) { textError.value = error instanceof Error ? error.message : String(error) }
+}
 export function studioGeometryCommand(edit: GeometryEdit) {
   return sendTextCommand('geometry', undefined, undefined, undefined, edit)
 }
@@ -198,10 +280,77 @@ export function studioGeometryBatchCommand(edit: GeometryEdit) {
 }
 
 export function installStudioTextSelection() {
-  const onSelection = () => { if (activeText.value) captureStudioTextSelection() }
-  const preventMutation = (event: Event) => {
+  const composing = new TextCompositionBuffer()
+  let suppressCompositionInput = false
+  let pendingDocument: TextDocument | null = null
+  let pendingSelection: StudioSelection | null = null
+  let pendingCount = 0
+  let contentTail: Promise<unknown> = Promise.resolve()
+  const onSelection = () => { if (activeText.value?.editing && !composing.active && !pendingCount) captureStudioTextSelection() }
+  const queueContent = (content: string, selected?: StudioSelection) => {
+    const state = activeText.value
+    if (!state?.document) return
+    const selection = selected ?? pendingSelection ?? captureStudioTextSelection() ?? textSelection.value
+    if (selection.mode === 'objects') return
+    try {
+      const preview = replaceText(pendingDocument ?? state.document, selection, content)
+      pendingDocument = preview.document
+      pendingSelection = preview.selection
+      pendingCount++
+      contentTail = contentTail.then(() => studioContentCommand(content, selection)).finally(() => {
+        pendingCount--
+        if (!pendingCount) { pendingDocument = null; pendingSelection = null }
+      })
+    }
+    catch (error) { textError.value = error instanceof Error ? error.message : String(error) }
+  }
+  const beforeInput = (event: Event) => {
     const host = root()
-    if (host && event.target instanceof Node && host.contains(event.target)) event.preventDefault()
+    if (!host || !(event.target instanceof Node) || !host.contains(event.target)) return
+    const input = event as InputEvent
+    if (composing.active || input.isComposing) return
+    event.preventDefault()
+    if (suppressCompositionInput && ['insertText', 'insertFromComposition'].includes(input.inputType)) {
+      suppressCompositionInput = false; return
+    }
+    if (input.inputType === 'insertText' || input.inputType === 'insertLineBreak')
+      queueContent(input.inputType === 'insertLineBreak' ? '\n' : input.data ?? '')
+    else if (input.inputType === 'insertFromPaste')
+      queueContent((input.dataTransfer?.getData('text/plain') ?? input.data ?? '').replaceAll('\r\n', '\n'))
+    else if (input.inputType === 'deleteContentBackward' || input.inputType === 'deleteContentForward') {
+      const state = activeText.value
+      const selection = pendingSelection ?? captureStudioTextSelection() ?? textSelection.value
+      if (!state?.document || selection.mode === 'objects') return
+      if (selection.mode === 'textRange') { queueContent('', selection); return }
+      const at = selection.at
+      let anchor: TextPoint = at
+      let focus: TextPoint = at
+      const current = pendingDocument ?? state.document
+      if (input.inputType === 'deleteContentBackward') {
+        if (at.grapheme > 0) anchor = { ...at, grapheme: at.grapheme - 1 }
+        else if (at.paragraph > 0) anchor = { paragraph: at.paragraph - 1,
+          grapheme: graphemes(current.paragraphs[at.paragraph - 1].runs.map(run => run.text).join('')).length }
+      }
+      else {
+        const length = graphemes(current.paragraphs[at.paragraph].runs.map(run => run.text).join('')).length
+        if (at.grapheme < length) focus = { ...at, grapheme: at.grapheme + 1 }
+        else if (at.paragraph < current.paragraphs.length - 1) focus = { paragraph: at.paragraph + 1, grapheme: 0 }
+      }
+      if (anchor !== at || focus !== at) queueContent('', { mode: 'textRange', textId: state.id, anchor, focus })
+    }
+  }
+  const onCompositionStart = (event: CompositionEvent) => {
+    const host = root()
+    if (!host || !(event.target instanceof Node) || !host.contains(event.target)) return
+    composing.start(pendingSelection ?? captureStudioTextSelection() ?? textSelection.value)
+  }
+  const onCompositionUpdate = (event: CompositionEvent) => { composing.update(event.data) }
+  const onCompositionEnd = (event: CompositionEvent) => {
+    const final = composing.finish(event.data)
+    if (!final) return
+    suppressCompositionInput = true
+    setTimeout(() => { suppressCompositionInput = false }, 0)
+    queueContent(final.text, final.selection)
   }
   const keyboard = (event: KeyboardEvent) => {
     if (!activeText.value || !(event.ctrlKey || event.metaKey) || event.altKey) return
@@ -221,12 +370,20 @@ export function installStudioTextSelection() {
     }
   })
   document.addEventListener('selectionchange', onSelection)
-  document.addEventListener('beforeinput', preventMutation, true)
+  document.addEventListener('beforeinput', beforeInput, true)
+  document.addEventListener('compositionstart', onCompositionStart, true)
+  document.addEventListener('compositionupdate', onCompositionUpdate, true)
+  document.addEventListener('compositionend', onCompositionEnd, true)
   document.addEventListener('keydown', keyboard, true)
-  observer.observe(document.body, { childList: true, subtree: true })
+  // Vue can patch attributes in place without replacing children. Preserve edit
+  // mode when such a patch removes our transient contenteditable attribute.
+  observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['contenteditable'] })
   return () => {
     document.removeEventListener('selectionchange', onSelection)
-    document.removeEventListener('beforeinput', preventMutation, true)
+    document.removeEventListener('beforeinput', beforeInput, true)
+    document.removeEventListener('compositionstart', onCompositionStart, true)
+    document.removeEventListener('compositionupdate', onCompositionUpdate, true)
+    document.removeEventListener('compositionend', onCompositionEnd, true)
     document.removeEventListener('keydown', keyboard, true)
     observer.disconnect()
   }

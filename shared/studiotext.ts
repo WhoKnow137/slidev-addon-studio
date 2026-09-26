@@ -22,7 +22,9 @@ export interface ParagraphStyle {
   spacingBefore?: number
   spacingAfter?: number
   indent?: number
-  list?: { kind: 'ordered' | 'bullet', level: number }
+  firstLineIndent?: number
+  direction?: 'auto' | 'ltr' | 'rtl'
+  list?: { kind: 'ordered' | 'bullet', level: number } | null
 }
 export interface TextRun { text: string, overrides: Partial<CharacterStyle> }
 export interface TextParagraph { properties: ParagraphStyle, runs: TextRun[] }
@@ -46,6 +48,11 @@ export interface TextDocument {
   /** Object-level paragraph alignment, separate from paragraph overrides. */
   align: 'left' | 'center' | 'right' | 'justify'
   styleRef?: string
+  /** Explicit object attributes; with styleRef these override the shared style. */
+  localDefaults?: Partial<CharacterStyle>
+  /** Explicit paragraph attributes before a shared style is resolved. */
+  localParagraphs?: ParagraphStyle[]
+  explicitAttributes?: { rotate: boolean, align: boolean, verticalAlign: boolean }
 }
 export type StudioSelection =
   | { mode: 'objects', ids: string[] }
@@ -62,11 +69,11 @@ export interface SourceHandle {
 }
 export type ParseResult = { ok: true, document: TextDocument } | { ok: false, reason: string }
 
-const textAttrs = new Set(['version', 'id', 'pos', 'resize', 'rotate', 'max-width', 'affine', 'font-family', 'font-size', 'font-weight', 'font-style', 'color', 'line-height', 'letter-spacing', 'decoration', 'text-case', 'align', 'vertical-align', 'style-ref'])
-const runAttrs = new Set(['font-family', 'font-size', 'font-weight', 'font-style', 'color', 'line-height', 'letter-spacing', 'decoration', 'text-case', 'link'])
-const paragraphAttrs = new Set(['align'])
+const textAttrs = new Set(['version', 'id', 'pos', 'resize', 'rotate', 'max-width', 'affine', 'font-family', 'font-size', 'font-weight', 'font-style', 'color', 'line-height', 'letter-spacing', 'decoration', 'text-case', 'font-axes', 'open-type', 'align', 'vertical-align', 'style-ref'])
+const runAttrs = new Set(['font-family', 'font-size', 'font-weight', 'font-style', 'color', 'line-height', 'letter-spacing', 'decoration', 'text-case', 'font-axes', 'open-type', 'link'])
+const paragraphAttrs = new Set(['align', 'spacing-before', 'spacing-after', 'indent', 'first-line-indent', 'list-kind', 'list-level', 'direction'])
 const numericAttrs = new Set(['rotate', 'font-size', 'font-weight', 'letter-spacing'])
-const defaultStyle: CharacterStyle = {
+export const defaultStyle: CharacterStyle = {
   fontFamily: 'sans-serif', fontSize: 32, fontWeight: 400, fontStyle: 'normal', color: '#ffffff',
   lineHeight: 'normal', letterSpacing: 0, decoration: 'none', textCase: 'none',
 }
@@ -74,6 +81,53 @@ const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
 export function graphemes(text: string): string[] { return [...segmenter.segment(text)].map(part => part.segment) }
 const count = (text: string) => graphemes(text).length
 const fail = (reason: string): never => { throw new Error(reason) }
+const tag = /^[A-Za-z0-9]{4}$/
+export function validateTagMap(kind: 'fontAxes' | 'openType', input: unknown): Record<string, number> | Record<string, boolean | number> {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) fail(`Invalid ${kind}`)
+  const pairs = Object.entries(input as Record<string, unknown>)
+  if (pairs.length > 64 || pairs.some(([key, value]) => !tag.test(key) ||
+    (kind === 'fontAxes' ? typeof value !== 'number' || !Number.isFinite(value)
+      : typeof value !== 'boolean' && (typeof value !== 'number' || !Number.isFinite(value) || value < 0)))) fail(`Invalid ${kind}`)
+  return Object.fromEntries(pairs.sort(([a], [b]) => a.localeCompare(b))) as Record<string, number | boolean>
+}
+function parseTagMap(kind: 'fontAxes' | 'openType', raw: string | number): Record<string, number> | Record<string, boolean | number> {
+  try { return validateTagMap(kind, JSON.parse(String(raw))) }
+  catch { return fail(`Invalid ${kind}`) }
+}
+export function validateLink(input: unknown): string {
+  const value = String(input)
+  if (!value || value.length > 2048 || /[\u0000-\u001f\u007f]/.test(value)) fail('Invalid link')
+  if (value.startsWith('#') && value.length > 1) return value
+  if (value.startsWith('/') && !value.startsWith('//')) return value
+  try { if (['https:', 'http:', 'mailto:'].includes(new URL(value).protocol)) return value }
+  catch { /* Not an absolute URL. */ }
+  return fail('Unsupported link URL')
+}
+function paragraphStyle(values: Record<string, string | number>): ParagraphStyle {
+  const result: ParagraphStyle = {}
+  if (values.align !== undefined) {
+    if (!['left', 'center', 'right', 'justify'].includes(String(values.align))) fail('Invalid paragraph align')
+    result.align = String(values.align) as ParagraphStyle['align']
+  }
+  for (const [attr, key] of [['spacing-before', 'spacingBefore'], ['spacing-after', 'spacingAfter'], ['indent', 'indent'], ['first-line-indent', 'firstLineIndent']] as const) {
+    if (values[attr] === undefined) continue
+    const value = Number(values[attr])
+    if (!Number.isFinite(value) || (key.startsWith('spacing') && value < 0)) fail(`Invalid ${attr}`)
+    result[key] = value
+  }
+  if (values.direction !== undefined) {
+    if (!['auto', 'ltr', 'rtl'].includes(String(values.direction))) fail('Invalid paragraph direction')
+    result.direction = String(values.direction) as ParagraphStyle['direction']
+  }
+  if (values['list-kind'] !== undefined || values['list-level'] !== undefined) {
+    if (values['list-kind'] === 'none' && values['list-level'] === undefined) { result.list = null; return result }
+    if (!['bullet', 'ordered'].includes(String(values['list-kind']))) fail('Invalid list kind')
+    const level = Number(values['list-level'] ?? 0)
+    if (!Number.isSafeInteger(level) || level < 0 || level > 12) fail('Invalid list level')
+    result.list = { kind: String(values['list-kind']) as 'bullet' | 'ordered', level }
+  }
+  return result
+}
 
 function attrs(node: ElementNode, allowed: Set<string>): Record<string, string | number> {
   const values: Record<string, string | number> = {}
@@ -169,7 +223,9 @@ function styleAttrs(values: Record<string, string | number>): Partial<CharacterS
   }
   if (values.decoration !== undefined) style.decoration = validateCharacterValue('decoration', values.decoration) as CharacterStyle['decoration']
   if (values['text-case'] !== undefined) style.textCase = validateCharacterValue('textCase', values['text-case']) as CharacterStyle['textCase']
-  if (values.link !== undefined) style.link = String(values.link)
+  if (values.link !== undefined) style.link = validateLink(values.link)
+  if (values['font-axes'] !== undefined) style.fontAxes = parseTagMap('fontAxes', values['font-axes']) as Record<string, number>
+  if (values['open-type'] !== undefined) style.openType = parseTagMap('openType', values['open-type']) as Record<string, boolean | number>
   return style
 }
 
@@ -237,10 +293,7 @@ export function parseStudioText(source: string): ParseResult {
         if (child.type !== NodeTypes.ELEMENT || child.tag !== 'StudioParagraph') fail('Mixed direct text and paragraphs are read-only')
         const paragraph = child as ElementNode
         const props = attrs(paragraph, paragraphAttrs)
-        const paragraphAlign = string(props.align, 'left')
-        if (!['left', 'center', 'right', 'justify'].includes(paragraphAlign)) fail('Invalid paragraph align')
-        paragraphs.push({ properties: props.align === undefined ? {} : { align: paragraphAlign as ParagraphStyle['align'] },
-          runs: content(paragraph.children, false) })
+        paragraphs.push({ properties: paragraphStyle(props), runs: content(paragraph.children, false) })
       }
     }
     else paragraphs.push({ properties: {}, runs: content(element.children, false) })
@@ -253,7 +306,11 @@ export function parseStudioText(source: string): ParseResult {
       resizeMode: resize as ResizeMode,
       verticalAlign: verticalAlign as TextDocument['verticalAlign'],
       align: align as TextDocument['align'],
-      ...(values['style-ref'] !== undefined ? { styleRef: String(values['style-ref']) } : {}),
+      localDefaults: styleAttrs(values),
+      explicitAttributes: { rotate: values.rotate !== undefined, align: values.align !== undefined,
+        verticalAlign: values['vertical-align'] !== undefined },
+      ...(values['style-ref'] !== undefined ? { styleRef: String(values['style-ref']),
+        localParagraphs: paragraphs.map(paragraph => ({ ...paragraph.properties })) } : {}),
     }
     return { ok: true, document }
   }
@@ -267,7 +324,15 @@ export function normalizeText(document: TextDocument): TextDocument {
     for (const run of paragraph.runs) {
       if (!run.text) continue
       for (const key of Object.keys(run.overrides) as (keyof CharacterStyle)[]) {
-        if (run.overrides[key] === copy.defaults[key]) delete run.overrides[key]
+        if (key === 'fontAxes' || key === 'openType') {
+          const existing = { ...(run.overrides[key] as Record<string, unknown>) }
+          const inherited = copy.defaults[key] as Record<string, unknown> | undefined
+          for (const tag of Object.keys(existing)) if (existing[tag] === inherited?.[tag]) delete existing[tag]
+          if (Object.keys(existing).length) (run.overrides as any)[key] = existing
+          else delete run.overrides[key]
+          continue
+        }
+        if (JSON.stringify(run.overrides[key]) === JSON.stringify(copy.defaults[key])) delete run.overrides[key]
       }
       const last = merged.at(-1)
       const same = last && JSON.stringify(Object.entries(last.overrides).sort()) === JSON.stringify(Object.entries(run.overrides).sort())
@@ -297,8 +362,13 @@ export function setCharacterProperties(document: TextDocument, range: { anchor: 
 }
 
 /** One grapheme-safe split/merge engine for every character command. */
+export function effectiveCharacter(defaults: CharacterStyle, overrides: Partial<CharacterStyle>): CharacterStyle {
+  return { ...defaults, ...overrides,
+    fontAxes: defaults.fontAxes || overrides.fontAxes ? { ...defaults.fontAxes, ...overrides.fontAxes } : undefined,
+    openType: defaults.openType || overrides.openType ? { ...defaults.openType, ...overrides.openType } : undefined }
+}
 export function mapCharacterRange(document: TextDocument, range: { anchor: TextPoint, focus: TextPoint },
-  change: (effective: CharacterStyle) => Partial<CharacterStyle>): TextDocument {
+  change: (effective: CharacterStyle, overrides: Partial<CharacterStyle>) => Partial<CharacterStyle>): TextDocument {
   const [start, end] = orderedRange(range)
   const copy = structuredClone(document)
   if (start.paragraph < 0 || end.paragraph >= copy.paragraphs.length) fail('Range outside document')
@@ -318,10 +388,10 @@ export function mapCharacterRange(document: TextDocument, range: { anchor: TextP
       const b = Math.max(0, Math.min(pieces.length, hi - offset))
       if (a) next.push({ text: pieces.slice(0, a).join(''), overrides: { ...run.overrides } })
       if (b > a) {
-        const effective = { ...document.defaults, ...run.overrides }
-        const patch = change(effective)
+        const effective = effectiveCharacter(document.defaults, run.overrides)
+        const patch = change(effective, run.overrides)
         for (const key of Object.keys(patch) as (keyof CharacterStyle)[]) {
-          if (effective[key] !== patch[key]) changed = true
+          if (JSON.stringify(effective[key]) !== JSON.stringify(patch[key])) changed = true
         }
         next.push({ text: pieces.slice(a, b).join(''), overrides: { ...run.overrides, ...patch } })
       }
@@ -347,31 +417,48 @@ function renderRuns(runs: TextRun[]): string {
     const attrs = [
       ['font-family', run.overrides.fontFamily], ['font-size', run.overrides.fontSize], ['font-weight', run.overrides.fontWeight],
       ['font-style', run.overrides.fontStyle], ['color', run.overrides.color], ['line-height', run.overrides.lineHeight],
-      ['letter-spacing', run.overrides.letterSpacing], ['decoration', run.overrides.decoration], ['text-case', run.overrides.textCase], ['link', run.overrides.link],
+      ['letter-spacing', run.overrides.letterSpacing], ['decoration', run.overrides.decoration], ['text-case', run.overrides.textCase],
+      ['font-axes', run.overrides.fontAxes && JSON.stringify(validateTagMap('fontAxes', run.overrides.fontAxes))],
+      ['open-type', run.overrides.openType && JSON.stringify(validateTagMap('openType', run.overrides.openType))], ['link', run.overrides.link],
     ].filter(([, value]) => value !== undefined).map(([key, value]) => ` ${key}="${escapeAttr(String(value))}"`).join('')
     return `<StudioRun${attrs}>${text}</StudioRun>`
   }).join('')
 }
 export function serializeStudioText(input: TextDocument): string {
   const doc = normalizeText(input)
-  const { geometry: g, defaults: d } = doc
+  const { geometry: g } = doc
+  const d = doc.localDefaults ?? doc.defaults
   const pos = [n(g.x), n(g.y), g.width === null ? 'auto' : n(g.width), g.height === null ? 'auto' : n(g.height)].join(',')
   const attributes = [
     `version="1"`, `id="${escapeAttr(doc.id)}"`, `pos="${pos}"`, `resize="${doc.resizeMode}"`,
-    g.rotationDeg < 0 ? `rotate="${n(g.rotationDeg)}"` : `:rotate="${n(g.rotationDeg)}"`,
+    ...(g.rotationDeg !== 0 || doc.explicitAttributes?.rotate
+      ? [g.rotationDeg < 0 ? `rotate="${n(g.rotationDeg)}"` : `:rotate="${n(g.rotationDeg)}"`] : []),
     ...(g.maxWidth === undefined ? [] : [`max-width="${n(g.maxWidth)}"`]),
     ...(g.affine === undefined ? [] : [`affine="${g.affine.map(n).join(',')}"`]),
-    `font-family="${escapeAttr(d.fontFamily)}"`, `:font-size="${n(d.fontSize)}"`, `font-weight="${n(d.fontWeight)}"`,
-    `font-style="${d.fontStyle}"`, `color="${escapeAttr(d.color)}"`, `line-height="${escapeAttr(String(d.lineHeight))}"`,
-    `letter-spacing="${escapeAttr(String(d.letterSpacing))}"`,
-    ...(d.decoration !== 'none' ? [`decoration="${d.decoration}"`] : []),
-    ...(d.textCase !== 'none' ? [`text-case="${d.textCase}"`] : []),
-    `align="${doc.align}"`,
-    `vertical-align="${doc.verticalAlign}"`, ...(doc.styleRef !== undefined ? [`style-ref="${escapeAttr(doc.styleRef)}"`] : []),
+    ...(d.fontFamily === undefined ? [] : [`font-family="${escapeAttr(d.fontFamily)}"`]),
+    ...(d.fontSize === undefined ? [] : [`:font-size="${n(d.fontSize)}"`]),
+    ...(d.fontWeight === undefined ? [] : [`font-weight="${n(d.fontWeight)}"`]),
+    ...(d.fontStyle === undefined ? [] : [`font-style="${d.fontStyle}"`]),
+    ...(d.color === undefined ? [] : [`color="${escapeAttr(d.color)}"`]),
+    ...(d.lineHeight === undefined ? [] : [`line-height="${escapeAttr(String(d.lineHeight))}"`]),
+    ...(d.letterSpacing === undefined ? [] : [`letter-spacing="${escapeAttr(String(d.letterSpacing))}"`]),
+    ...(d.decoration !== undefined && d.decoration !== 'none' ? [`decoration="${d.decoration}"`] : []),
+    ...(d.textCase !== undefined && d.textCase !== 'none' ? [`text-case="${d.textCase}"`] : []),
+    ...(d.fontAxes === undefined ? [] : [`font-axes="${escapeAttr(JSON.stringify(validateTagMap('fontAxes', d.fontAxes)))}"`]),
+    ...(d.openType === undefined ? [] : [`open-type="${escapeAttr(JSON.stringify(validateTagMap('openType', d.openType)))}"`]),
+    ...(doc.align !== 'left' || doc.explicitAttributes?.align ? [`align="${doc.align}"`] : []),
+    ...(doc.verticalAlign !== 'top' || doc.explicitAttributes?.verticalAlign ? [`vertical-align="${doc.verticalAlign}"`] : []),
+    ...(doc.styleRef !== undefined ? [`style-ref="${escapeAttr(doc.styleRef)}"`] : []),
   ]
-  const explicit = doc.paragraphs.length > 1 || !!doc.paragraphs[0]?.properties.align
+  const explicit = doc.paragraphs.length > 1 || !!doc.paragraphs[0]
+    && Object.keys(doc.paragraphs[0].properties).length > 0
+  const paragraphAttrs = (p: ParagraphStyle) => [
+    ['align', p.align], ['spacing-before', p.spacingBefore], ['spacing-after', p.spacingAfter],
+    ['indent', p.indent], ['first-line-indent', p.firstLineIndent], ['list-kind', p.list === null ? 'none' : p.list?.kind],
+    ['list-level', p.list?.level], ['direction', p.direction],
+  ].filter(([, value]) => value !== undefined).map(([key, value]) => ` ${key}="${escapeAttr(String(value))}"`).join('')
   const body = explicit
-    ? doc.paragraphs.map(paragraph => `<StudioParagraph${paragraph.properties.align ? ` align="${paragraph.properties.align}"` : ''}>${renderRuns(paragraph.runs)}</StudioParagraph>`).join('')
+    ? doc.paragraphs.map((paragraph, index) => `<StudioParagraph${paragraphAttrs(doc.styleRef ? doc.localParagraphs?.[index] ?? {} : paragraph.properties)}>${renderRuns(paragraph.runs)}</StudioParagraph>`).join('')
     : renderRuns(doc.paragraphs[0]?.runs ?? [])
   return `<StudioText ${attributes.join(' ')}>${body}</StudioText>`
 }

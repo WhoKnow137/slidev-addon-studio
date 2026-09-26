@@ -61,6 +61,7 @@ function scaleStyles(document: TextDocument, factor: number) {
     if (style.letterSpacing !== undefined) style.letterSpacing = scaleDistance(style.letterSpacing, factor)
   }
   change(document.defaults)
+  if (document.localDefaults) change(document.localDefaults)
   for (const paragraph of document.paragraphs) for (const run of paragraph.runs) change(run.overrides)
 }
 export function applyGeometry(document: TextDocument, edit: GeometryEdit): TextDocument {

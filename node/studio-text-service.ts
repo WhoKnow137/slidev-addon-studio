@@ -8,6 +8,9 @@ import { dirname, join } from 'node:path'
 import { parseStudioText, serializeStudioText, uniqueStudioText } from '../shared/studiotext'
 import { applyTypography } from '../shared/typography'
 import { applyGeometry, patchGeometrySource } from '../shared/geometry'
+import { applyTextStyle, detachTextStyle, resolveTextStyle } from '../shared/text-styles'
+import { readTextStyles } from './text-style-service'
+import { replaceText } from '../shared/text-content'
 import { splitDeck } from './slide-source'
 
 export class StudioTextError extends Error {
@@ -57,6 +60,11 @@ export class StudioTextService {
   private history = new Map<string, SessionHistory>()
   constructor(private options: ResolvedSlidevOptions) {}
 
+  private async resolved(document: NonNullable<ReturnType<typeof parseStudioText> & { ok: true }>['document']) {
+    if (!document.styleRef) return document
+    return resolveTextStyle(document, (await readTextStyles(this.options)).file)
+  }
+
   private async sourceRef(no: number, id: string) {
     if (!Number.isInteger(no) || no < 1 || typeof id !== 'string' || !id || id.length > 256)
       throw new StudioTextError('Invalid slide or StudioText ID')
@@ -98,8 +106,12 @@ export class StudioTextService {
     const handle: SourceHandle = { fileId: ref.filePath, filePath: ref.filePath, textId: id,
       sourceStart: span.start, sourceEnd: span.end, expectedRevision: revision }
     const history = session ? this.history.get(session) : undefined
-    return { handle, editable: parsed.ok, reason: parsed.ok ? null : parsed.reason,
-      document: parsed.ok ? parsed.document : null,
+    let document = parsed.ok ? parsed.document : null
+    let reason = parsed.ok ? null : parsed.reason
+    try { if (document) document = await this.resolved(document) }
+    catch (error) { document = null; reason = (error as Error).message }
+    return { handle, editable: !!document, reason,
+      document,
       ...historyFlags(history, ref.filePath, id) }
   }
 
@@ -153,7 +165,7 @@ export class StudioTextService {
   }
 
   async command(payload: {
-    action: 'format' | 'typography' | 'geometry' | 'geometry-batch' | 'undo' | 'redo'
+    action: 'format' | 'typography' | 'geometry' | 'geometry-batch' | 'style' | 'content' | 'undo' | 'redo'
     no: number
     id: string
     session: string
@@ -162,6 +174,8 @@ export class StudioTextService {
     property?: 'color' | 'fontSize'
     value?: string | number
     edit?: TypographyEdit
+    styleEdit?: { kind: 'apply', id: string } | { kind: 'detach' }
+    content?: string
     geometryEdit?: GeometryEdit
     ids?: string[]
   }) {
@@ -175,6 +189,9 @@ export class StudioTextService {
       const beforeSource = textContent(before)
       const { span, parsed } = this.inspect(beforeSource, ref.sourceIndex, payload.id)
       if (!parsed.ok) throw new StudioTextError(`Visual text editing unavailable: ${parsed.reason}`, 422)
+      let model
+      try { model = await this.resolved(parsed.document) }
+      catch (error) { throw new StudioTextError((error as Error).message, 422) }
       const history = this.history.get(payload.session) ?? { undo: [], redo: [] }
       this.history.set(payload.session, history)
       if (payload.action === 'geometry-batch') {
@@ -186,7 +203,7 @@ export class StudioTextService {
         if (!edit || !((edit.kind === 'translate') || (edit.kind === 'set' && ['x', 'y'].includes(edit.property))))
           throw new StudioTextError('Multi-object geometry supports translation and X/Y only')
         const patches: { start: number, end: number, replacement: string }[] = []
-        let firstDocument = parsed.document
+        let firstDocument = model
         for (const id of ids) {
           const item = this.inspect(beforeSource, ref.sourceIndex, id)
           if (!item.parsed.ok) throw new StudioTextError(`Visual geometry unavailable for ${id}: ${item.parsed.reason}`, 422)
@@ -199,7 +216,7 @@ export class StudioTextService {
         }
         if (patches.every(patch => patch.replacement === beforeSource.slice(patch.start, patch.end)))
           return { ok: true, noOp: true, revision, ...historyFlags(history, ref.filePath, payload.id),
-            selection: payload.selection, document: parsed.document }
+          selection: payload.selection, document: model }
         let candidate = beforeSource
         for (const patch of patches.sort((a, b) => b.start - a.start))
           candidate = candidate.slice(0, patch.start) + patch.replacement + candidate.slice(patch.end)
@@ -223,12 +240,12 @@ export class StudioTextService {
           : payload.selection.textId !== payload.id)) throw new StudioTextError('Select this StudioText before changing geometry')
         if (!payload.geometryEdit || typeof payload.geometryEdit !== 'object') throw new StudioTextError('Missing geometry edit')
         let changed
-        try { changed = applyGeometry(parsed.document, payload.geometryEdit) }
+        try { changed = applyGeometry(model, payload.geometryEdit) }
         catch (error) { throw new StudioTextError((error as Error).message, 422) }
-        if (changed === parsed.document) return { ok: true, noOp: true, revision,
-          ...historyFlags(history, ref.filePath, payload.id), selection: payload.selection, document: parsed.document }
+        if (changed === model) return { ok: true, noOp: true, revision,
+          ...historyFlags(history, ref.filePath, payload.id), selection: payload.selection, document: model }
         const replacement = payload.geometryEdit.kind === 'scale'
-          ? serializeStudioText(changed) : patchGeometrySource(span.source, parsed.document, changed)
+          ? serializeStudioText(changed) : patchGeometrySource(span.source, model, changed)
         const outcome = await this.replace(ref, revision, payload.id, replacement, before, beforeSource, span)
         if (!outcome.noOp) {
           history.undo.push({ label: `Change text geometry: ${payload.geometryEdit.kind}`, filePath: ref.filePath, textId: payload.id,
@@ -239,6 +256,46 @@ export class StudioTextService {
         return { ok: true, ...outcome, ...historyFlags(history, ref.filePath, payload.id),
           selection: payload.selection, document: changed }
       }
+      if (payload.action === 'content') {
+        if (!payload.selection || payload.selection.mode === 'objects') throw new StudioTextError('Select a text caret or range')
+        let changed
+        try { changed = replaceText(model, payload.selection, payload.content ?? '') }
+        catch (error) { throw new StudioTextError((error as Error).message, 422) }
+        if (changed.noOp) return { ok: true, noOp: true, revision,
+          ...historyFlags(history, ref.filePath, payload.id), selection: changed.selection, document: model }
+        const replacement = serializeStudioText(changed.document)
+        const outcome = await this.replace(ref, revision, payload.id, replacement, before, beforeSource, span)
+        if (!outcome.noOp) {
+          history.undo.push({ label: 'Edit text content', filePath: ref.filePath, textId: payload.id,
+            beforeRevision: revision, afterRevision: outcome.revision, beforeSource: span.source, afterSource: replacement,
+            beforeSelection: payload.selection, afterSelection: changed.selection })
+          history.redo = []
+        }
+        return { ok: true, ...outcome, ...historyFlags(history, ref.filePath, payload.id), selection: changed.selection,
+          document: changed.document }
+      }
+      if (payload.action === 'style') {
+        if (payload.selection?.mode !== 'objects' || payload.selection.ids.length !== 1 || payload.selection.ids[0] !== payload.id)
+          throw new StudioTextError('Select one text object to apply or detach a style')
+        const resource = (await readTextStyles(this.options)).file
+        let changed
+        try {
+          changed = payload.styleEdit?.kind === 'apply' ? applyTextStyle(model, payload.styleEdit.id, resource)
+            : payload.styleEdit?.kind === 'detach' ? detachTextStyle(model, resource)
+              : (() => { throw Error('Invalid shared style action') })()
+        }
+        catch (error) { throw new StudioTextError((error as Error).message, 422) }
+        const replacement = serializeStudioText(changed)
+        const outcome = await this.replace(ref, revision, payload.id, replacement, before, beforeSource, span)
+        if (!outcome.noOp) {
+          history.undo.push({ label: `${payload.styleEdit!.kind} text style`, filePath: ref.filePath, textId: payload.id,
+            beforeRevision: revision, afterRevision: outcome.revision, beforeSource: span.source, afterSource: replacement,
+            beforeSelection: payload.selection, afterSelection: payload.selection })
+          history.redo = []
+        }
+        return { ok: true, ...outcome, ...historyFlags(history, ref.filePath, payload.id), selection: payload.selection,
+          document: changed }
+      }
       if (payload.action === 'format' || payload.action === 'typography') {
         if (!payload.selection) throw new StudioTextError('Select this StudioText before formatting')
         if (payload.action === 'format' && (payload.selection.mode !== 'textRange' || !['color', 'fontSize'].includes(String(payload.property))))
@@ -248,22 +305,22 @@ export class StudioTextService {
           : payload.edit!
         if (!edit || typeof edit !== 'object') throw new StudioTextError('Missing typography edit')
         let outcomeModel
-        try { outcomeModel = applyTypography(parsed.document, payload.selection, edit) }
+        try { outcomeModel = applyTypography(model, payload.selection, edit) }
         catch (error) { throw new StudioTextError((error as Error).message, 422) }
         if (outcomeModel.noOp) return { ok: true, noOp: true, revision,
-          ...historyFlags(history, ref.filePath, payload.id), selection: outcomeModel.selection, document: parsed.document }
-        if (outcomeModel.document === parsed.document) {
-          history.undo.push({ label: `Set typing ${edit.property}`, filePath: ref.filePath, textId: payload.id,
+          ...historyFlags(history, ref.filePath, payload.id), selection: outcomeModel.selection, document: model }
+        if (outcomeModel.document === model) {
+          history.undo.push({ label: `Set typing ${edit.domain === 'axis' || edit.domain === 'feature' ? edit.tag : edit.domain === 'link' || edit.domain === 'face' || edit.domain === 'list-kind' ? edit.domain : edit.property}`, filePath: ref.filePath, textId: payload.id,
             beforeRevision: revision, afterRevision: revision, beforeSource: span.source, afterSource: span.source,
             beforeSelection: payload.selection, afterSelection: outcomeModel.selection, selectionOnly: true })
           history.redo = []
           return { ok: true, noOp: false, revision, ...historyFlags(history, ref.filePath, payload.id),
-            selection: outcomeModel.selection, document: parsed.document }
+            selection: outcomeModel.selection, document: model }
         }
         const replacement = serializeStudioText(outcomeModel.document)
         const outcome = await this.replace(ref, revision, payload.id, replacement, before, beforeSource, span)
         if (!outcome.noOp) {
-          history.undo.push({ label: `Set text ${edit.property}`, filePath: ref.filePath, textId: payload.id,
+          history.undo.push({ label: `Set text ${edit.domain === 'axis' || edit.domain === 'feature' ? edit.tag : edit.domain === 'link' || edit.domain === 'face' || edit.domain === 'list-kind' ? edit.domain : edit.property}`, filePath: ref.filePath, textId: payload.id,
             beforeRevision: revision, afterRevision: outcome.revision, beforeSource: span.source, afterSource: replacement,
             beforeSelection: payload.selection, afterSelection: outcomeModel.selection })
           history.redo = []
@@ -299,13 +356,13 @@ export class StudioTextService {
         const restored = this.inspect(next, ref.sourceIndex, payload.id).parsed
         return { ok: true, ...outcome, ...historyFlags(history, ref.filePath, payload.id),
           selection: payload.action === 'undo' ? entry.beforeSelection : entry.afterSelection,
-          document: restored.ok ? restored.document : parsed.document }
+          document: restored.ok ? await this.resolved(restored.document) : model }
       }
       if (entry.selectionOnly) {
         from.pop()
         to.push(entry)
         return { ok: true, noOp: false, revision, ...historyFlags(history, ref.filePath, payload.id),
-          selection: payload.action === 'undo' ? entry.beforeSelection : entry.afterSelection, document: parsed.document }
+          selection: payload.action === 'undo' ? entry.beforeSelection : entry.afterSelection, document: model }
       }
       const outcome = await this.replace(ref, revision, payload.id, replacement, before, beforeSource, span)
       if (!outcome.noOp) {
@@ -316,7 +373,7 @@ export class StudioTextService {
       }
       return { ok: true, ...outcome, ...historyFlags(history, ref.filePath, payload.id),
         selection: payload.action === 'undo' ? entry.beforeSelection : entry.afterSelection,
-        document: parseStudioText(replacement).ok ? (parseStudioText(replacement) as { ok: true, document: typeof parsed.document }).document : parsed.document }
+        document: parseStudioText(replacement).ok ? await this.resolved((parseStudioText(replacement) as { ok: true, document: typeof model }).document) : model }
     })
   }
 }
