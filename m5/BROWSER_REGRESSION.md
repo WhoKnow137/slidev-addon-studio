@@ -17,12 +17,16 @@ The range buttons select real DOM text endpoints; the editor must map them back 
 Additional acceptance sequences:
 
 1. Missing font → explicit NanumMyeongjo replacement → reload → undo → redo → undo. Inspect source: only `font-family` changes. Range preview/commit on `Variable` leaves digits in Inter.
-2. Variable object → Weight axis drag → one commit → reload → inspect computed `fontVariationSettings` → undo/redo. Changing one axis preserves `opsz`. Hold a preview while an external source revision changes: the guarded service refuses the captured revision. Unit service regressions cover the stale revision path.
+2. Variable object → Weight axis drag → one commit → reload → inspect computed `fontVariationSettings` → undo/redo. Changing one axis preserves `opsz`. Select Variable text and wait for font metadata, then use **Test axis revision conflict**: a real slider input previews 740, a separate guarded session commits 710, and the old slider change receives 409. The fixture verifies the renderer retains 710 and undoes its external edit. Recorded output: `PASS axis conflict: refused=true; authoritative="opsz" 24, "wght" 710; restored=true`.
 3. Turn off Tabular figures → reload → computed `fontFeatureSettings` contains `"tnum" 0` → undo.
-4. Shared hero style size 52 → 58 → both objects update; second object's red override survives. Detach the second → effective appearance is unchanged → undo. Create/apply operations also have guarded two-object service tests.
+4. Shared hero style size 52 → 58 → both objects update; second object's red override survives. Detach the second → effective appearance is unchanged → undo. The browser also created **Heading / Browser**, applied it to hero-a, and undid both the object attachment and resource creation to exact original bytes. Guarded two-object service tests cover create/apply/update/detach history.
 5. Select three paragraphs → color `#00ff55`, size 31, underline → reload. Only Arabic/remaining text in paragraph one, all paragraph two, and `Linked` in paragraph three change. Alignment center affects all three paragraph records. Undo/redo preserves boundaries and original strings.
 6. Select three paragraphs → bullets. Select RTL paragraph → increase its list level. Select three paragraphs → numbered. Reload; all kinds change and individual levels survive. Undo each operation.
 7. Select linked range → change URL → change typography independently → reload → remove link → undo/redo. Text/graphemes and feature overrides remain unchanged.
 8. Select RTL paragraph → character formatting → reload; `dir="rtl"` persists and source strings stay in logical order. Combining accent, flag and ZWJ emoji remain whole graphemes.
 
 Keep test evidence public and synthetic. Private Equinox timings and source checks belong only in the converter's ignored output directory.
+
+The keyboard-cancel regression focuses Font family, searches `nAnUm`, then activates **Cancel** with Enter. Missing requested family and source remain unchanged. This caught and fixed a bubbling Enter handler that previously also selected the highlighted candidate. The final package contains the correction.
+
+The complete link sequence was executed: remove original link, add `https://example.org/new`, set weight 700, reload (text `Linked 1/2`, weight 700, feature `frac`, and URL persisted), edit URL, remove, undo/redo, then undo all commands. Source returned byte-for-byte to the committed fixture.
