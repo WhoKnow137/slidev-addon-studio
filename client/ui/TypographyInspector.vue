@@ -64,17 +64,23 @@ watch(linkValue, value => { linkDraft.value = value }, { immediate: true })
 let previewHost: HTMLElement | null = null
 let previewFamily = ''
 let previewAxes = ''
+let appliedFamily: string | null = null
+let appliedAxes: string | null = null
 let clearRangePreview: (() => void) | null = null
 let previewGuard: { id: string, revision: string, selection: typeof textSelection.value } | null = null
 function clearPreview() {
   clearRangePreview?.()
   clearRangePreview = null
   if (previewHost) {
-    previewHost.style.fontFamily = previewFamily
-    previewHost.style.fontVariationSettings = previewAxes
+    // A renderer patch may already have replaced our temporary style. Do not
+    // overwrite its authoritative value while cancelling a stale preview.
+    if (appliedFamily !== null && previewHost.style.fontFamily === appliedFamily) previewHost.style.fontFamily = previewFamily
+    if (appliedAxes !== null && previewHost.style.fontVariationSettings === appliedAxes) previewHost.style.fontVariationSettings = previewAxes
   }
   previewHost = null
   previewGuard = null
+  appliedFamily = null
+  appliedAxes = null
 }
 onBeforeUnmount(clearPreview)
 watch(() => [activeText.value?.id, activeText.value?.revision, activeText.value?.stale], clearPreview)
@@ -91,7 +97,7 @@ function previewFont(candidate: string | null) {
   void waitForFont(candidate).then(() => {
     if (previewHost !== host || textSelection.value !== selection) return
     clearRangePreview = previewStudioTextRange('fontFamily', candidate)
-    if (!clearRangePreview) host.style.fontFamily = candidate
+    if (!clearRangePreview) { host.style.fontFamily = candidate; appliedFamily = host.style.fontFamily }
   })
 }
 async function chooseFont(value: string) {
@@ -112,7 +118,7 @@ function previewAxis(tag: string, value: number) {
   const settings = Object.entries(axes).sort(([a], [b]) => a.localeCompare(b)).map(([name, number]) => `"${name}" ${number}`).join(', ')
   clearRangePreview?.()
   clearRangePreview = previewStudioTextRange('fontVariationSettings', settings)
-  if (!clearRangePreview) host.style.fontVariationSettings = settings
+  if (!clearRangePreview) { host.style.fontVariationSettings = settings; appliedAxes = host.style.fontVariationSettings }
 }
 function commitAxis(tag: string, value: number) {
   const guard = previewGuard

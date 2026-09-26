@@ -12,6 +12,43 @@ const samples = {
   Chinese: { updates: ['z', 'zh', '中'], final: '中文' },
   Korean: { updates: ['ㅎ', '하', '한'], final: '한국어' },
 }
+async function axisConflict() {
+  if (!import.meta.env.DEV) return
+  const editor = await import('../../../client/studiotext-editor')
+  const host = document.querySelector<HTMLElement>('[data-studio-text-id="m5-variable"]')!
+  await editor.beginStudioTextEdit(host, 2)
+  editor.textSelection.value = { mode: 'objects', ids: ['m5-variable'] }
+  await new Promise(resolve => setTimeout(resolve, 100))
+  const slider = document.querySelector<HTMLInputElement>('[aria-label="Weight axis"]')
+  if (!slider) { result.value = 'Select Variable text in Studio and wait for its font catalog first.'; return }
+  const state = editor.activeText.value!
+  const originalFetch = window.fetch
+  let refused = false
+  window.fetch = (...args) => {
+    const pending = originalFetch(...args)
+    if (String(args[0]) === '/@studio/text' && args[1]?.method === 'POST') void pending.then(response => { if (response.status === 409) refused = true })
+    return pending
+  }
+  const externalSession = crypto.randomUUID()
+  try {
+    slider.value = '740'; slider.dispatchEvent(new Event('input', { bubbles: true }))
+    const response = await originalFetch('/@studio/text', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'typography', no: 2, id: state.id, session: externalSession, expectedRevision: state.revision,
+        selection: { mode: 'objects', ids: [state.id] }, edit: { domain: 'axis', tag: 'wght', value: 710 } }) })
+    const external = await response.json()
+    slider.dispatchEvent(new Event('change', { bubbles: true }))
+    await new Promise(resolve => setTimeout(resolve, 450))
+    const rendered = getComputedStyle(document.querySelector('[data-studio-text-id="m5-variable"]')!).fontVariationSettings
+    const valid = response.ok && refused && rendered.includes('"wght" 710') && editor.activeText.value?.stale
+    await originalFetch('/@studio/text', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'undo', no: 2, id: state.id, session: externalSession, expectedRevision: external.revision }) })
+    await new Promise(resolve => setTimeout(resolve, 180))
+    await editor.beginStudioTextEdit(document.querySelector<HTMLElement>('[data-studio-text-id="m5-variable"]')!, 2)
+    result.value = `${valid ? 'PASS' : 'FAIL'} axis conflict: refused=${refused}; authoritative=${rendered}; restored=true`
+    sessionStorage.setItem('m5-ime-result', result.value); window.dispatchEvent(new Event('m5-ime-result'))
+  }
+  finally { window.fetch = originalFetch }
+}
 function selectRange(kind: 'across' | 'second' | 'link') {
   const host = document.querySelector<HTMLElement>('[data-studio-text-id="m5-paragraphs"][contenteditable="true"]')
   if (!host) { result.value = 'Double click paragraph text first.'; return }
@@ -75,6 +112,7 @@ async function compose(language: keyof typeof samples) {
     <button @mousedown.prevent @click="selectRange('across')">Select three paragraphs</button>
     <button @mousedown.prevent @click="selectRange('second')">Select RTL paragraph</button>
     <button @mousedown.prevent @click="selectRange('link')">Select linked range</button>
+    <button @mousedown.prevent @click="axisConflict">Test axis revision conflict</button>
   </aside>
 </template>
 <style scoped>
