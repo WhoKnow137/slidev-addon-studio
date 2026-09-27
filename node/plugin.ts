@@ -8,6 +8,11 @@ import { applyDeckAction } from './deck'
 import { StudioTextService } from './studio-text-service'
 import { buildFontCatalog } from './font-catalog'
 import { TextStyleService } from './text-style-service'
+import { structuralStatus } from './structural-service'
+import type { StructuralAction } from './structural-service'
+import { StructuralTransactionStore } from './structural-transaction'
+import { access } from 'node:fs/promises'
+import { dirname, join as pathJoin } from 'node:path'
 
 const VIRTUAL_CATALOG = 'virtual:slidev-studio/catalog'
 const RESOLVED_CATALOG = `\0${VIRTUAL_CATALOG}`
@@ -66,9 +71,12 @@ export function studioPlugin(options: ResolvedSlidevOptions): Plugin {
       return renderCatalogModule(options)
     },
 
-    configureServer(server) {
+    async configureServer(server) {
       if (!isDev)
         return
+      const generated=pathJoin(dirname(options.data.entry.filepath),'data/slides/index.json')
+      if(await access(generated).then(()=>true,()=>false))
+        await new StructuralTransactionStore(dirname(options.data.entry.filepath)).recover()
 
       // `markdownSetup` is a single slot: a project that defines its own wins
       // over the addon's, which silently costs Studio its click-to-select.
@@ -98,7 +106,7 @@ export function studioPlugin(options: ResolvedSlidevOptions): Plugin {
           // a slide added past the end came back rendering whatever used to
           // carry that number. Rebuilding the page is the honest answer to a
           // change in the deck's shape, and it is a deliberate, occasional act.
-          if (route === 'deck' && req.method === 'POST') {
+          if ((route === 'deck' || route === 'structural' || (route === 'source-history' && (result as any)?.ownerKind === 'structural')) && req.method === 'POST') {
             setTimeout(() => server.hot.send({ type: 'full-reload' }), 150)
           }
           if (route === 'text-styles' && req.method === 'POST')
@@ -145,6 +153,8 @@ async function handle(route: string, method: string, req: any, options: Resolved
     return studioText.historyStatus(q.get('session') ?? '')
   }
   if (route === 'source-history' && method === 'POST') return studioText.historyCommand(await readLimitedJson(req))
+  if (route === 'structural' && method === 'GET') return structuralStatus(options)
+  if (route === 'structural' && method === 'POST') return studioText.structuralCommand(await readLimitedJson(req))
   if (route === 'text' && method === 'GET') {
     const query = new URL(req.url ?? '/', 'http://localhost').searchParams
     return await studioText.status(Number(query.get('no')), query.get('id') ?? '', query.get('session') ?? undefined)
@@ -172,8 +182,31 @@ async function handle(route: string, method: string, req: any, options: Resolved
   if (route === 'assets' && method === 'POST')
     return await saveAsset(options, await readJson(req))
 
-  if (route === 'deck' && method === 'POST')
-    return await applyDeckAction(options, await readJson(req))
+  if (route === 'deck' && method === 'GET') {
+    const generated=pathJoin(dirname(options.data.entry.filepath),'data/slides/index.json')
+    return await access(generated).then(()=>structuralStatus(options),()=>({supported:false}))
+  }
+  if (route === 'deck' && method === 'POST') {
+    const payload=await readLimitedJson(req)
+    const generated=pathJoin(dirname(options.data.entry.filepath),'data/slides/index.json')
+    if (await access(generated).then(()=>true,()=>false)) {
+      const state=await structuralStatus(options),slides=state.slides
+      if(payload.action==='insert')throw Object.assign(Error('Managed slide insertion requires an explicit supported template'),{status:422})
+      const slide=slides[payload.no-1]
+      if(!slide)throw Object.assign(Error('Slide identity unavailable'),{status:422})
+      let action: StructuralAction
+      if(payload.action==='duplicate')action={kind:'slide',action:'duplicate',slideId:slide.id}
+      else if(payload.action==='remove')action={kind:'slide',action:'delete',slideId:slide.id}
+      else if(payload.action==='move') {
+        const to=Math.max(1,Math.min(slides.length,Number(payload.to)))
+        const without=slides.filter(s=>s.id!==slide.id)
+        action={kind:'slide',action:'reorder',slideId:slide.id,beforeSlideId:without[to-1]?.id}
+      }
+      else throw Object.assign(Error('Unsupported managed deck action'),{status:422})
+      return studioText.structuralCommand({action,session:payload.session,expectedRevision:payload.expectedRevision})
+    }
+    return await applyDeckAction(options,payload)
+  }
 
   return undefined
 }

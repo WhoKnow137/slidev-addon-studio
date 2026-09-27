@@ -14,6 +14,10 @@ import { replaceText } from '../shared/text-content'
 import { splitDeck } from './slide-source'
 import { applyLayerGeometry, parseManagedLayer, patchLayerGeometrySource, uniqueManagedLayer } from '../shared/managed-layer'
 import type { LayerEdit } from '../shared/managed-layer'
+import { StructuralError, StructuralTransactionStore, digest, reverseChanges } from './structural-transaction'
+import type { CommittedChange } from './structural-transaction'
+import { planStructural } from './structural-service'
+import type { StructuralAction } from './structural-service'
 
 export class StudioTextError extends Error {
   constructor(message: string, public status = 400) { super(message) }
@@ -34,6 +38,7 @@ interface HistoryEntry {
   beforeFile?: string
   afterFile?: string
   ids?: string[]
+  structural?: { changes: CommittedChange[], root: string }
 }
 interface SessionHistory { undo: HistoryEntry[], redo: HistoryEntry[] }
 const historyFlags = (history: SessionHistory | undefined, filePath: string, id: string) => ({
@@ -84,13 +89,25 @@ export class StudioTextService {
     const h = this.history.get(session)
     const head=async(entry:HistoryEntry|undefined)=>entry?{no:entry.sourceNo??1,id:entry.textId,revision:sha(await readFile(entry.filePath))}:null
     return { undoHead:await head(h?.undo.at(-1)),redoHead:await head(h?.redo.at(-1)),canUndo: !!h?.undo.length, canRedo: !!h?.redo.length,
-      undo: h?.undo.at(-1)?.label ?? null, redo: h?.redo.at(-1)?.label ?? null }
+      undo: h?.undo.at(-1)?.label ?? null, redo: h?.redo.at(-1)?.label ?? null,
+      undoKind:h?.undo.at(-1)?.structural?'structural':h?.undo.at(-1)?.layer?'layer':h?.undo.length?'text':null,
+      redoKind:h?.redo.at(-1)?.structural?'structural':h?.redo.at(-1)?.layer?'layer':h?.redo.length?'text':null }
   }
 
   async historyCommand(payload: { action: 'undo' | 'redo', no: number, session: string, expectedRevision: string }) {
     if (!['undo','redo'].includes(payload.action)) throw new StudioTextError('Invalid history action')
     const entry = this.history.get(payload.session)?.[payload.action]?.at(-1)
     if (!entry) throw new StudioTextError('No source transaction', 409)
+    if (entry.structural) {
+      if (sha(await readFile(entry.filePath)) !== payload.expectedRevision) throw new StudioTextError('stale-structural-history',409)
+      const store = new StructuralTransactionStore(entry.structural.root)
+      const changes = reverseChanges(entry.structural.changes,payload.action)
+      try { await store.commit({label:`${payload.action}: ${entry.label}`,changes}) }
+      catch (error) { if (error instanceof StructuralError) throw new StudioTextError(error.message,error.status); throw error }
+      const history=this.history.get(payload.session)!,from=history[payload.action],to=history[payload.action==='undo'?'redo':'undo']
+      from.pop();to.push(entry)
+      return {ok:true,ownerKind:'structural',no:entry.sourceNo??1,id:entry.textId,revision:sha(await readFile(entry.filePath))}
+    }
     const files = await Promise.all(this.options.data.slides.map(async s => {
       try { return s.source.filepath ? await realpath(s.source.filepath) : null } catch { return null }
     }))
@@ -99,6 +116,28 @@ export class StudioTextService {
     const request = { ...payload, no: sourceNo, id: entry.textId }
     const result = entry.layer ? await this.layerCommand(request) : await this.command(request)
     return { ...result, ownerKind: entry.layer ? 'layer' : 'text', id: entry.textId, no: sourceNo }
+  }
+
+  async structuralCommand(payload:{action:StructuralAction,session:string,expectedRevision:string}) {
+    if (!/^[a-zA-Z0-9-]{8,100}$/.test(payload.session) || !/^[0-9a-f]{64}$/.test(payload.expectedRevision))
+      throw new StudioTextError('Invalid structural session/revision')
+    let planned
+    try { planned=await planStructural(this.options,payload.action) }
+    catch (error) { if(error instanceof StructuralError)throw new StudioTextError(error.message,error.status);throw error }
+    const anchor=planned.store.relative(join(planned.store.root,planned.anchor))
+    const current=await planned.store.snapshot(anchor)
+    if(current.revision!==payload.expectedRevision)throw new StudioTextError('stale-structural-revision',409)
+    let changes
+    try { changes=await planned.store.commit(planned.plan) }
+    catch (error) { if(error instanceof StructuralError)throw new StudioTextError(error.message,error.status);throw error }
+    const history=this.history.get(payload.session)??{undo:[],redo:[]};this.history.set(payload.session,history)
+    const anchorChange=changes.find(c=>c.path===planned.anchor)
+    history.undo.push({sourceNo:planned.focusNo,label:planned.plan.label,filePath:join(planned.store.root,planned.anchor),
+      textId:payload.action.kind==='object'?payload.action.id:payload.action.slideId,
+      beforeRevision:anchorChange?.expected??current.revision,afterRevision:anchorChange?.next?digest(anchorChange.next):current.revision,
+      beforeSource:'',afterSource:'',structural:{changes,root:planned.store.root}})
+    history.redo=[]
+    return {ok:true,no:planned.focusNo,total:planned.total,revision:sha(await readFile(join(planned.store.root,planned.anchor)))}
   }
 
   async layerCommand(payload: { action: 'geometry' | 'undo' | 'redo', no: number, id: string,
@@ -169,7 +208,10 @@ export class StudioTextService {
     const tail = prior.then(() => own)
     this.tails.set(filePath, tail)
     await prior
-    try { return await task() }
+    try {
+      const root=dirname(this.options.data.entry?.filepath??filePath)
+      return await new StructuralTransactionStore(root).withLock(task)
+    }
     finally {
       release()
       if (this.tails.get(filePath) === tail) this.tails.delete(filePath)

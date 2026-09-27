@@ -8,7 +8,7 @@ import { activePanel, gridEnabled, outlineEnabled, snapEnabled, studioOpen } fro
 import StudioIcon from './parts/StudioIcon.vue'
 
 const genericHistory = useStudioHistory()
-const managed=computed(()=>!!activeLayer.value||!!activeText.value)
+const managed=computed(()=>!!activeLayer.value||!!activeText.value||sourceHistory.structuralHead.value)
 const canUndo=computed(()=>managed.value?sourceHistory.canUndo.value:genericUndo.value)
 const canRedo=computed(()=>managed.value?sourceHistory.canRedo.value:genericRedo.value)
 const history={undo:()=>managed.value?sourceHistory.undo():genericHistory.undo(),redo:()=>managed.value?sourceHistory.redo():genericHistory.redo()}

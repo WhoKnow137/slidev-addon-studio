@@ -31,6 +31,7 @@ import '../../styles/studio.css'
 const nav = useNav()
 const uninstallTextSelection = installStudioTextSelection()
 const uninstallLayerKeys = installLayerKeys()
+void sourceHistory.refresh()
 onScopeDispose(uninstallLayerKeys)
 onScopeDispose(uninstallTextSelection)
 const no = computed(() => nav.currentSlideNo.value)

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import {computed} from 'vue'
-import {activeLayer,selectedLayers,layerCommand,layerError,layerBusy} from '../managed-layer-editor'
+import {activeLayer,selectedLayers,layerCommand,layerError,layerBusy,structuralLayer} from '../managed-layer-editor'
 import {geometryDisplay} from '../../shared/geometry'
 import type {LayerGeometry} from '../../shared/managed-layer'
 const fields=[['x','X'],['y','Y'],['width','W'],['height','H'],['rotationDeg','Rotation']] as const
@@ -26,7 +26,11 @@ async function commit(k:keyof LayerGeometry,event:Event){
       </label>
     </div>
     <p v-if="multiple" class="studio-hint">Drag translates all selected layers. Typed X/Y sets each layer to that absolute parent-local value. Multi-resize and multi-rotate are unavailable.</p>
-    <p class="studio-hint">Layer geometry only. Paint/crop, replacement, corners and structural actions are unavailable. Use Slidev’s source editor for manual source changes.</p>
+    <div v-if="!multiple && model && !['READ_ONLY','UNAVAILABLE'].includes(model.capabilities.level) && model.kind!=='instance'" class="studio-button-row">
+      <button class="studio-button" type="button" :disabled="layerBusy" @click="structuralLayer('duplicate')">Duplicate</button>
+      <button class="studio-button" type="button" :disabled="layerBusy" @click="structuralLayer('delete')">Delete</button>
+    </div>
+    <p class="studio-hint">Duplicate and delete are available for supported layers. Paint, crop, replacement and corner editing are not yet available.</p>
     <p v-if="layerError" class="studio-error" role="alert">{{layerError}}</p>
   </section>
 </template>

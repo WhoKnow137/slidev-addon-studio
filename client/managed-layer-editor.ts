@@ -54,16 +54,17 @@ export async function layerCommand(edit:LayerEdit,expectedRevision=activeLayer.v
   finally{layerBusy.value=false}
 }
 export const sourceHistory={
-  canUndo:shallowRef(false),canRedo:shallowRef(false),
-  async refresh(){const response=await fetch(`/@studio/source-history?session=${sourceSession()}`);if(response.ok){const r=await response.json();this.canUndo.value=r.canUndo;this.canRedo.value=r.canRedo}},
+  canUndo:shallowRef(false),canRedo:shallowRef(false),structuralHead:shallowRef(false),
+  async refresh(){const response=await fetch(`/@studio/source-history?session=${sourceSession()}`);if(response.ok){const r=await response.json();this.canUndo.value=r.canUndo;this.canRedo.value=r.canRedo;this.structuralHead.value=r.undoKind==='structural'||r.redoKind==='structural'}},
   async command(action:'undo'|'redo'){
-    const state=activeLayer.value??activeText.value;if(!state)return
     // Resolve the actual latest history owner, including another source file/slide.
     const current=await fetch('/@studio/source-history?session='+sourceSession()),data=await current.json()
     const head=data[action+'Head'];if(!current.ok||!head){layerError.value='History owner unavailable';return}
     const response=await fetch('/@studio/source-history',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,no:head.no,session:sourceSession(),expectedRevision:head.revision})}),result=await response.json()
     if(!response.ok){layerError.value=result.error;return}
-    if(result.ownerKind==='layer'){
+    if(result.ownerKind==='structural'){
+      clearLayers();endStudioTextEdit();activeText.value=null;selection.value=null
+    }else if(result.ownerKind==='layer'){
       endStudioTextEdit();activeText.value=null
       const host=layerHost(result.no,result.id);if(host){selection.value={el:host,no:result.no,range:null,kind:'component',tag:'StudioLayer',positioned:true,nested:false,label:`${result.document.kind} layer`};await inspectLayer(host,result.no)}
     }else{
@@ -74,15 +75,26 @@ export const sourceHistory={
     await this.refresh()
   },undo(){return this.command('undo')},redo(){return this.command('redo')},
 }
+export async function structuralLayer(action:'delete'|'duplicate'){
+  const state=activeLayer.value;if(!state)return
+  try{
+    const response=await fetch('/@studio/structural',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:{kind:'object',action,slideId:state.document.slideId,id:state.id},expectedRevision:state.revision,session:sourceSession()})})
+    const result=await response.json();if(!response.ok)throw Error(result.error??'Structural transaction refused')
+    clearLayers();selection.value=null;await sourceHistory.refresh()
+  }catch(e){layerError.value=(e as Error).message}
+}
 /** Managed authoring input is captured before DeckVideo/SlideNavigation. */
 export function installLayerKeys(){
   const keyboard=(e:KeyboardEvent)=>{
-    if(!studioOpen.value||!activeLayer.value)return
+    if(!studioOpen.value||(!activeLayer.value&&!sourceHistory.structuralHead.value))return
     const typing=e.target instanceof Element&&e.target.closest('input,textarea,select,[contenteditable="true"]')
     if(typing)return
-    if(e.key==='Escape'){e.preventDefault();clearLayers();selection.value=null;return}
     if((e.ctrlKey||e.metaKey)&&['z','y'].includes(e.key.toLowerCase())){e.preventDefault();e.stopImmediatePropagation();void sourceHistory.command(e.key.toLowerCase()==='y'||e.shiftKey?'redo':'undo');return}
-    if(['Delete','Backspace'].includes(e.key)||(e.ctrlKey||e.metaKey)&&['d','c','v','x'].includes(e.key.toLowerCase())){e.preventDefault();e.stopImmediatePropagation();layerError.value='Structural layer operations require M6';return}
+    if(!activeLayer.value)return
+    if(e.key==='Escape'){e.preventDefault();clearLayers();selection.value=null;return}
+    if(['Delete','Backspace'].includes(e.key)){e.preventDefault();e.stopImmediatePropagation();void structuralLayer('delete');return}
+    if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='d'){e.preventDefault();e.stopImmediatePropagation();void structuralLayer('duplicate');return}
+    if((e.ctrlKey||e.metaKey)&&['c','v','x'].includes(e.key.toLowerCase())){e.preventDefault();e.stopImmediatePropagation();layerError.value='Cross-deck clipboard semantics are unavailable';return}
     const step=e.shiftKey?10:1,delta:Record<string,[number,number]>={ArrowLeft:[-step,0],ArrowRight:[step,0],ArrowUp:[0,-step],ArrowDown:[0,step]}
     if(delta[e.key]&&!e.ctrlKey&&!e.metaKey&&!e.altKey){e.preventDefault();e.stopImmediatePropagation();void layerCommand({kind:'translate',dx:delta[e.key][0],dy:delta[e.key][1]})}
   }
