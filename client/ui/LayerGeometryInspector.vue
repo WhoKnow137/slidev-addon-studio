@@ -31,6 +31,21 @@ async function commit(k:keyof LayerGeometry,event:Event){
       <button class="studio-button" type="button" :disabled="layerBusy" @click="structuralLayer('delete')">Delete</button>
     </div>
     <p class="studio-hint">Duplicate and delete are available for supported layers. Paint, crop, replacement and corner editing are not yet available.</p>
+    <section v-if="model?.paintInspection && !multiple" data-testid="image-paint-inspector" aria-label="Image paint evidence">
+      <h3 class="studio-section__title">Image paint · read-only</h3>
+      <p class="studio-hint">{{model.paintInspection.ownership}} · {{model.paintInspection.evidence.scope}}</p>
+      <p class="studio-hint">Native mode, matrix direction and coordinate space: unknown. Layer geometry and paint geometry are separate.</p>
+      <dl v-for="paint in model.paintInspection.images" :key="paint.sourcePath" class="studio-hint">
+        <dt>Source address (not identity)</dt><dd>{{paint.sourcePath}}</dd>
+        <dt>Raw private mode</dt><dd>{{paint.rawMode ?? 'absent'}}</dd>
+        <dt>Intrinsic dimensions</dt><dd>{{paint.intrinsicWidth ?? 'absent'}} × {{paint.intrinsicHeight ?? 'absent'}}</dd>
+        <dt>Paint opacity</dt><dd>{{paint.paintOpacity ?? 'absent'}}</dd>
+        <dt>Raw matrix</dt><dd><code>{{JSON.stringify(paint.rawMatrix)}}</code></dd>
+      </dl>
+      <p class="studio-hint">Layer opacity: {{model.paintInspection.evidence.layer.opacity ?? 'absent'}}</p>
+      <details><summary>Preserved paint/resource evidence</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere">{{JSON.stringify(model.paintInspection.evidence,null,2)}}</pre></details>
+      <p class="studio-hint" role="status">Editing blocked pending native fixtures I-F01–I-F05 and B-F02. STRETCH is not classified as Crop.</p>
+    </section>
     <p v-if="layerError" class="studio-error" role="alert">{{layerError}}</p>
   </section>
 </template>

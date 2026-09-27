@@ -11,6 +11,7 @@ import { TextStyleService } from './text-style-service'
 import { structuralStatus } from './structural-service'
 import type { StructuralAction } from './structural-service'
 import { StructuralTransactionStore } from './structural-transaction'
+import { refuseImagePaintMutation } from '../shared/image-paint'
 import { access } from 'node:fs/promises'
 import { dirname, join as pathJoin } from 'node:path'
 
@@ -155,6 +156,10 @@ async function handle(route: string, method: string, req: any, options: Resolved
   if (route === 'source-history' && method === 'POST') return studioText.historyCommand(await readLimitedJson(req))
   if (route === 'structural' && method === 'GET') return structuralStatus(options)
   if (route === 'structural' && method === 'POST') return studioText.structuralCommand(await readLimitedJson(req))
+  if (route === 'image-paint' && method === 'POST') {
+    try { refuseImagePaintMutation() }
+    catch(error) { throw Object.assign(error as Error,{status:422}) }
+  }
   if (route === 'text' && method === 'GET') {
     const query = new URL(req.url ?? '/', 'http://localhost').searchParams
     return await studioText.status(Number(query.get('no')), query.get('id') ?? '', query.get('session') ?? undefined)

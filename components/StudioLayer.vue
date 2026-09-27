@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import {computed} from 'vue'
-const props=defineProps<{version:string,id:string,slideId:string,sourceId:string,sourceType:string,instancePath?:string,parentId?:string,kind:string,pos:string,rotate:string,capability:string,reason?:string,rotation?:string}>()
+const props=defineProps<{version:string,id:string,slideId:string,sourceId:string,sourceType:string,instancePath?:string,parentId?:string,kind:string,pos:string,rotate:string,capability:string,reason?:string,rotation?:string,paintEvidence?:string}>()
 const frame=computed(()=>{const [x,y,w,h]=props.pos.split(',').map(Number);return {position:'absolute' as const,left:`${x}px`,top:`${y}px`,width:`${w}px`,height:`${h}px`,transform:`rotate(${Number(props.rotate)}deg)`,transformOrigin:'center center'}})
 </script>
 <template>

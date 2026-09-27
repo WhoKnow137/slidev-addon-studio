@@ -3,6 +3,8 @@ import type { ElementNode, SourceLocation } from '@vue/compiler-dom'
 import type { SourceSpan, TextDocument } from './studiotext'
 import { applyGeometry, geometryNumber, normalizeAngle } from './geometry'
 import type { GeometryEdit } from './geometry'
+import { inspectImagePaint } from './image-paint'
+import type { ImagePaintInspection } from './image-paint'
 
 export type LayerKind = 'image' | 'gif' | 'video' | 'shape' | 'vector' | 'frame' | 'instance'
 export type CapabilityLevel = 'FULL' | 'POSITION_ONLY' | 'READ_ONLY' | 'UNAVAILABLE'
@@ -16,12 +18,13 @@ export interface ManagedLayer {
   kind: LayerKind
   geometry: LayerGeometry
   capabilities: { level: CapabilityLevel, reason: string, rotation: boolean }
+  paintInspection?: ImagePaintInspection
 }
 export type LayerEdit = Extract<GeometryEdit, { kind: 'set' | 'translate' | 'resize' }>
   | { kind: 'frame', geometry: LayerGeometry }
 const kinds = new Set(['image','gif','video','shape','vector','frame','instance'])
 const levels = new Set(['FULL','POSITION_ONLY','READ_ONLY','UNAVAILABLE'])
-const attributes = new Set(['version','id','slide-id','source-id','source-type','instance-path','parent-id','kind','pos','rotate','capability','reason','rotation','class'])
+const attributes = new Set(['version','id','slide-id','source-id','source-type','instance-path','parent-id','kind','pos','rotate','capability','reason','rotation','class','paint-evidence'])
 const fail = (reason: string): never => { throw Error(reason) }
 function element(source: string): ElementNode {
   const errors: string[]=[]
@@ -46,6 +49,7 @@ export function parseManagedLayer(source: string): ManagedLayer {
   if(values.rotation!==undefined&&!['true','false'].includes(values.rotation))fail('Invalid rotation capability')
   return {version:1,id:values.id,slideId:values['slide-id'],source:{figmaGuid:values['source-id'],kiwiType:values['source-type'],instancePath:values['instance-path']?.split('/').filter(Boolean)??[]},
     ...(values['parent-id']?{parentId:values['parent-id']}:{}),kind:values.kind as LayerKind,
+    ...(values['paint-evidence']?{paintInspection:inspectImagePaint(values['paint-evidence'],values.id)}:{}),
     geometry:{x:parts[0],y:parts[1],width:parts[2],height:parts[3],rotationDeg:normalizeAngle(rotation)},
     capabilities:{level:values.capability as CapabilityLevel,reason:values.reason??'',rotation:values.rotation==='true'}}
 }
