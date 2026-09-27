@@ -12,11 +12,15 @@ import { applyTextStyle, detachTextStyle, resolveTextStyle } from '../shared/tex
 import { readTextStyles } from './text-style-service'
 import { replaceText } from '../shared/text-content'
 import { splitDeck } from './slide-source'
+import { applyLayerGeometry, parseManagedLayer, patchLayerGeometrySource, uniqueManagedLayer } from '../shared/managed-layer'
+import type { LayerEdit } from '../shared/managed-layer'
 
 export class StudioTextError extends Error {
   constructor(message: string, public status = 400) { super(message) }
 }
 interface HistoryEntry {
+  sourceNo?: number
+  layer?: boolean
   label: string
   filePath: string
   textId: string
@@ -59,6 +63,90 @@ export class StudioTextService {
   private tails = new Map<string, Promise<void>>()
   private history = new Map<string, SessionHistory>()
   constructor(private options: ResolvedSlidevOptions) {}
+
+  private inspectLayer(source: string, sourceIndex: number, id: string) {
+    let span
+    try { span = uniqueManagedLayer(source, id) }
+    catch (error) { throw new StudioTextError((error as Error).message, 409) }
+    if (!slideContains(source, sourceIndex, span.start)) throw new StudioTextError('Layer is outside the selected slide', 409)
+    return { span, document: parseManagedLayer(span.source) }
+  }
+
+  async layerStatus(no: number, id: string, session?: string) {
+    const ref = await this.sourceRef(no, id), bytes = await readFile(ref.filePath)
+    const item = this.inspectLayer(textContent(bytes), ref.sourceIndex, id)
+    return { document: item.document, handle: { filePath: ref.filePath, expectedRevision: sha(bytes) },
+      ...historyFlags(session ? this.history.get(session) : undefined, ref.filePath, id) }
+  }
+
+  /** Shared session order, independent of which text/layer is currently selected. */
+  async historyStatus(session: string) {
+    const h = this.history.get(session)
+    const head=async(entry:HistoryEntry|undefined)=>entry?{no:entry.sourceNo??1,id:entry.textId,revision:sha(await readFile(entry.filePath))}:null
+    return { undoHead:await head(h?.undo.at(-1)),redoHead:await head(h?.redo.at(-1)),canUndo: !!h?.undo.length, canRedo: !!h?.redo.length,
+      undo: h?.undo.at(-1)?.label ?? null, redo: h?.redo.at(-1)?.label ?? null }
+  }
+
+  async historyCommand(payload: { action: 'undo' | 'redo', no: number, session: string, expectedRevision: string }) {
+    if (!['undo','redo'].includes(payload.action)) throw new StudioTextError('Invalid history action')
+    const entry = this.history.get(payload.session)?.[payload.action]?.at(-1)
+    if (!entry) throw new StudioTextError('No source transaction', 409)
+    const files = await Promise.all(this.options.data.slides.map(async s => {
+      try { return s.source.filepath ? await realpath(s.source.filepath) : null } catch { return null }
+    }))
+    const sourceNo = entry.sourceNo ?? files.indexOf(entry.filePath) + 1
+    if (!sourceNo || files[sourceNo-1]!==entry.filePath) throw new StudioTextError('History source no longer in deck', 409)
+    const request = { ...payload, no: sourceNo, id: entry.textId }
+    const result = entry.layer ? await this.layerCommand(request) : await this.command(request)
+    return { ...result, ownerKind: entry.layer ? 'layer' : 'text', id: entry.textId, no: sourceNo }
+  }
+
+  async layerCommand(payload: { action: 'geometry' | 'undo' | 'redo', no: number, id: string,
+    session: string, expectedRevision: string, ids?: string[], geometryEdit?: LayerEdit }) {
+    if (!/^[a-zA-Z0-9-]{8,100}$/.test(payload.session) || !/^[0-9a-f]{64}$/.test(payload.expectedRevision))
+      throw new StudioTextError('Invalid session/revision')
+    const ref = await this.sourceRef(payload.no, payload.id)
+    return this.withFile(ref.filePath, async () => {
+      const bytes = await readFile(ref.filePath), revision = sha(bytes), before = textContent(bytes)
+      if (revision !== payload.expectedRevision) throw new StudioTextError('stale-source-revision', 409)
+      const first = this.inspectLayer(before, ref.sourceIndex, payload.id)
+      const history = this.history.get(payload.session) ?? { undo: [], redo: [] }
+      this.history.set(payload.session, history)
+      if (payload.action === 'undo' || payload.action === 'redo') {
+        const from = history[payload.action], to = history[payload.action === 'undo' ? 'redo' : 'undo'], entry = from.at(-1)
+        if (!entry?.layer || entry.filePath !== ref.filePath || entry.textId !== payload.id) throw new StudioTextError('No matching layer history', 409)
+        const expected = payload.action === 'undo' ? entry.afterFile : entry.beforeFile
+        const candidate = payload.action === 'undo' ? entry.beforeFile : entry.afterFile
+        if (before !== expected || candidate === undefined) throw new StudioTextError('stale-layer-history', 409)
+        for (const id of entry.ids ?? [entry.textId]) this.inspectLayer(candidate, ref.sourceIndex, id)
+        const outcome = await this.replaceWhole(ref.filePath, revision, Buffer.from(candidate))
+        from.pop(); to.push(entry)
+        return { ok: true, ...outcome, document: this.inspectLayer(candidate, ref.sourceIndex, payload.id).document }
+      }
+      if (payload.action !== 'geometry' || !payload.geometryEdit) throw new StudioTextError('Typed layer geometry edit required')
+      const ids = payload.ids ?? [payload.id]
+      if (ids[0] !== payload.id || ids.length < 1 || ids.length > 20 || new Set(ids).size !== ids.length) throw new StudioTextError('Invalid layer selection')
+      const edit = payload.geometryEdit
+      if (ids.length > 1 && !(edit.kind === 'translate' || (edit.kind === 'set' && ['x','y'].includes(edit.property)))) throw new StudioTextError('Multi-layer translation/X/Y only')
+      const patches = ids.map(id => {
+        const item = this.inspectLayer(before, ref.sourceIndex, id)
+        let changed
+        try { changed = applyLayerGeometry(item.document, edit) }
+        catch (error) { throw new StudioTextError((error as Error).message, 422) }
+        return { ...item.span, replacement: patchLayerGeometrySource(item.span.source, item.document, changed) }
+      })
+      let candidate = before
+      for (const p of patches.sort((a,b) => b.start-a.start)) candidate = candidate.slice(0,p.start)+p.replacement+candidate.slice(p.end)
+      for (const id of ids) this.inspectLayer(candidate, ref.sourceIndex, id)
+      if (candidate === before) return { ok: true, noOp: true, revision, document: first.document }
+      const outcome = await this.replaceWhole(ref.filePath, revision, Buffer.from(candidate))
+      history.undo.push({ sourceNo: payload.no, layer: true, label: `Layer geometry: ${edit.kind}`, filePath: ref.filePath, textId: payload.id, ids,
+        beforeRevision: revision, afterRevision: outcome.revision, beforeSource: first.span.source,
+        afterSource: this.inspectLayer(candidate, ref.sourceIndex, payload.id).span.source, beforeFile: before, afterFile: candidate })
+      history.redo = []
+      return { ok: true, ...outcome, document: this.inspectLayer(candidate, ref.sourceIndex, payload.id).document }
+    })
+  }
 
   private async resolved(document: NonNullable<ReturnType<typeof parseStudioText> & { ok: true }>['document']) {
     if (!document.styleRef) return document
@@ -225,7 +313,7 @@ export class StudioTextService {
           if (!item.parsed.ok) throw new StudioTextError(`Candidate geometry invalid for ${id}`, 422)
         }
         const outcome = await this.replaceWhole(ref.filePath, revision, Buffer.from(candidate, 'utf8'))
-        history.undo.push({ label: `Move ${ids.length} text objects`, filePath: ref.filePath, textId: payload.id, ids,
+        history.undo.push({ sourceNo: payload.no, label: `Move ${ids.length} text objects`, filePath: ref.filePath, textId: payload.id, ids,
           beforeRevision: revision, afterRevision: outcome.revision, beforeSource: span.source,
           afterSource: this.inspect(candidate, ref.sourceIndex, payload.id).span.source,
           beforeFile: beforeSource, afterFile: candidate,
@@ -248,7 +336,7 @@ export class StudioTextService {
           ? serializeStudioText(changed) : patchGeometrySource(span.source, model, changed)
         const outcome = await this.replace(ref, revision, payload.id, replacement, before, beforeSource, span)
         if (!outcome.noOp) {
-          history.undo.push({ label: `Change text geometry: ${payload.geometryEdit.kind}`, filePath: ref.filePath, textId: payload.id,
+          history.undo.push({ sourceNo: payload.no, label: `Change text geometry: ${payload.geometryEdit.kind}`, filePath: ref.filePath, textId: payload.id,
             beforeRevision: revision, afterRevision: outcome.revision, beforeSource: span.source, afterSource: replacement,
             beforeSelection: payload.selection, afterSelection: payload.selection })
           history.redo = []
@@ -266,7 +354,7 @@ export class StudioTextService {
         const replacement = serializeStudioText(changed.document)
         const outcome = await this.replace(ref, revision, payload.id, replacement, before, beforeSource, span)
         if (!outcome.noOp) {
-          history.undo.push({ label: 'Edit text content', filePath: ref.filePath, textId: payload.id,
+          history.undo.push({ sourceNo: payload.no, label: 'Edit text content', filePath: ref.filePath, textId: payload.id,
             beforeRevision: revision, afterRevision: outcome.revision, beforeSource: span.source, afterSource: replacement,
             beforeSelection: payload.selection, afterSelection: changed.selection })
           history.redo = []
@@ -288,7 +376,7 @@ export class StudioTextService {
         const replacement = serializeStudioText(changed)
         const outcome = await this.replace(ref, revision, payload.id, replacement, before, beforeSource, span)
         if (!outcome.noOp) {
-          history.undo.push({ label: `${payload.styleEdit!.kind} text style`, filePath: ref.filePath, textId: payload.id,
+          history.undo.push({ sourceNo: payload.no, label: `${payload.styleEdit!.kind} text style`, filePath: ref.filePath, textId: payload.id,
             beforeRevision: revision, afterRevision: outcome.revision, beforeSource: span.source, afterSource: replacement,
             beforeSelection: payload.selection, afterSelection: payload.selection })
           history.redo = []
@@ -310,7 +398,7 @@ export class StudioTextService {
         if (outcomeModel.noOp) return { ok: true, noOp: true, revision,
           ...historyFlags(history, ref.filePath, payload.id), selection: outcomeModel.selection, document: model }
         if (outcomeModel.document === model) {
-          history.undo.push({ label: `Set typing ${edit.domain === 'axis' || edit.domain === 'feature' ? edit.tag : edit.domain === 'link' || edit.domain === 'face' || edit.domain === 'list-kind' ? edit.domain : edit.property}`, filePath: ref.filePath, textId: payload.id,
+          history.undo.push({ sourceNo: payload.no, label: `Set typing ${edit.domain === 'axis' || edit.domain === 'feature' ? edit.tag : edit.domain === 'link' || edit.domain === 'face' || edit.domain === 'list-kind' ? edit.domain : edit.property}`, filePath: ref.filePath, textId: payload.id,
             beforeRevision: revision, afterRevision: revision, beforeSource: span.source, afterSource: span.source,
             beforeSelection: payload.selection, afterSelection: outcomeModel.selection, selectionOnly: true })
           history.redo = []
@@ -320,7 +408,7 @@ export class StudioTextService {
         const replacement = serializeStudioText(outcomeModel.document)
         const outcome = await this.replace(ref, revision, payload.id, replacement, before, beforeSource, span)
         if (!outcome.noOp) {
-          history.undo.push({ label: `Set text ${edit.domain === 'axis' || edit.domain === 'feature' ? edit.tag : edit.domain === 'link' || edit.domain === 'face' || edit.domain === 'list-kind' ? edit.domain : edit.property}`, filePath: ref.filePath, textId: payload.id,
+          history.undo.push({ sourceNo: payload.no, label: `Set text ${edit.domain === 'axis' || edit.domain === 'feature' ? edit.tag : edit.domain === 'link' || edit.domain === 'face' || edit.domain === 'list-kind' ? edit.domain : edit.property}`, filePath: ref.filePath, textId: payload.id,
             beforeRevision: revision, afterRevision: outcome.revision, beforeSource: span.source, afterSource: replacement,
             beforeSelection: payload.selection, afterSelection: outcomeModel.selection })
           history.redo = []

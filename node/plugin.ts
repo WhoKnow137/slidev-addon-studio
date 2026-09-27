@@ -135,6 +135,16 @@ export function studioPlugin(options: ResolvedSlidevOptions): Plugin {
 
 async function handle(route: string, method: string, req: any, options: ResolvedSlidevOptions,
   studioText: StudioTextService, textStyles: TextStyleService) {
+  if (route === 'layer' && method === 'GET') {
+    const q = new URL(req.url ?? '/', 'http://localhost').searchParams
+    return studioText.layerStatus(Number(q.get('no')), q.get('id') ?? '', q.get('session') ?? undefined)
+  }
+  if (route === 'layer' && method === 'POST') return studioText.layerCommand(await readLimitedJson(req))
+  if (route === 'source-history' && method === 'GET') {
+    const q = new URL(req.url ?? '/', 'http://localhost').searchParams
+    return studioText.historyStatus(q.get('session') ?? '')
+  }
+  if (route === 'source-history' && method === 'POST') return studioText.historyCommand(await readLimitedJson(req))
   if (route === 'text' && method === 'GET') {
     const query = new URL(req.url ?? '/', 'http://localhost').searchParams
     return await studioText.status(Number(query.get('no')), query.get('id') ?? '', query.get('session') ?? undefined)

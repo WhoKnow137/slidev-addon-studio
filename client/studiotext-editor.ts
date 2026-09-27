@@ -357,7 +357,7 @@ export function installStudioTextSelection() {
     const key = event.key.toLowerCase()
     if (key === 'z' || key === 'y') {
       event.preventDefault()
-      void studioTextCommand(key === 'y' || event.shiftKey ? 'redo' : 'undo')
+      void import('./managed-layer-editor').then(({sourceHistory})=>sourceHistory.command(key === 'y' || event.shiftKey ? 'redo' : 'undo'))
     }
   }
   const observer = new MutationObserver(() => {
