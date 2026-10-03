@@ -5,6 +5,8 @@ import { computed, ref } from 'vue'
 import { mappedElements } from '../dom'
 import { useStudio } from '../context'
 import { editing, hovered, outlineEnabled, selection } from '../state'
+import { activeText } from '../studiotext-editor'
+import {activeLayer,selectedLayers} from '../managed-layer-editor'
 
 /**
  * Everything drawn on top of the slide: the hover outline, the selection box
@@ -102,7 +104,7 @@ const handles: { id: ResizeHandle, x: number, y: number, cursor: string }[] = [
   { id: 'w', x: 0, y: 0.5, cursor: 'ew-resize' },
 ]
 
-const guideStyles = computed(() => studio.gizmo.guides.value.map((guide) => {
+const guideStyles = computed(() => [...studio.gizmo.guides.value, ...studio.textGizmo.guides.value, ...studio.layerGizmo.guides.value].map((guide) => {
   const { rect, scale } = studio.canvas
   return guide.orientation === 'vertical'
     ? {
@@ -185,24 +187,39 @@ function handleStyle(rect: Rect, handle: typeof handles[number]) {
           it covers, which is what the user aimed at.
         -->
         <div
+          v-if="!selection.el.closest('[data-studio-text-id],[data-studio-object-id],[data-studio-render-only]')"
           class="studio-move"
           @pointerdown="studio.gizmo.startMove($event)"
         />
+        <div v-if="selection.el.closest('[data-studio-text-id]') && !activeText?.editing"
+          class="studio-move studio-text-move" @pointerdown="studio.textGizmo.startMove($event)" />
+        <div v-if="selection.el.closest('[data-studio-object-id]') && activeLayer && !['READ_ONLY','UNAVAILABLE'].includes(activeLayer.document.capabilities.level)" class="studio-move studio-layer-move" @pointerdown="studio.layerGizmo.startMove($event)" />
+        <div v-for="handle in handles" v-if="activeLayer?.document.capabilities.level==='FULL' && selectedLayers.length===1 && selection.el.closest('[data-studio-object-id]')" :key="`layer-${handle.id}`" class="studio-handle studio-layer-handle" :data-handle="handle.id" :style="{left:`${handle.x*100}%`,top:`${handle.y*100}%`,cursor:handle.cursor}" @pointerdown="studio.layerGizmo.startResize($event,handle.id)" />
+        <div v-if="activeLayer?.document.capabilities.rotation && selectedLayers.length===1 && selection.el.closest('[data-studio-object-id]')" class="studio-handle studio-handle--rotate studio-layer-rotate" style="left:50%;top:-22px" title="Rotate layer. Shift for 15° steps" @pointerdown="studio.layerGizmo.startRotate($event)" />
 
         <div
           v-for="handle in handles"
+          v-if="!selection.el.closest('[data-studio-text-id],[data-studio-object-id],[data-studio-render-only]')"
           :key="handle.id"
           class="studio-handle"
           :style="{ left: `${handle.x * 100}%`, top: `${handle.y * 100}%`, cursor: handle.cursor }"
           @pointerdown="studio.gizmo.startResize($event, handle.id)"
         />
+        <div v-for="handle in handles" v-if="selection.el.closest('[data-studio-text-id]')"
+          :key="`text-${handle.id}`" class="studio-handle studio-text-handle"
+          :style="{ left: `${handle.x * 100}%`, top: `${handle.y * 100}%`, cursor: handle.cursor }"
+          @pointerdown="studio.textGizmo.startResize($event, handle.id)" />
 
         <div
+          v-if="!selection.el.closest('[data-studio-text-id],[data-studio-object-id],[data-studio-render-only]')"
           class="studio-handle studio-handle--rotate"
           style="left: 50%; top: -22px"
           title="Rotate. Hold Shift for 15° steps"
           @pointerdown="studio.gizmo.startRotate($event)"
         />
+        <div v-if="selection.el.closest('[data-studio-text-id]')" class="studio-handle studio-handle--rotate studio-text-rotate"
+          style="left: 50%; top: -22px" title="Rotate text. Hold Shift for 15° steps"
+          @pointerdown="studio.textGizmo.startRotate($event)" />
       </div>
     </template>
 

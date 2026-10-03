@@ -1,0 +1,22 @@
+{
+  "gate": "PASS",
+  "originalSha256": "6e30f60a994d0e34ed67df96b701abee9ea3531fb8ed64448b0e5f37289acca1",
+  "coloredSha256": "0fc67349151de8d3c93d5f626c8939d4ea266f2cf975bea9ec10bdbc01fcfc93",
+  "formattedSha256": "909f3cff1e56e19d7697e8c505f33aa91a5412f64c7bc2918d5ac3461159f35d",
+  "wordSelection": {
+    "word": "world",
+    "editable": true
+  },
+  "controls": true,
+  "colorAndSizeSurvivedReload": true,
+  "undoRedo": true,
+  "changedSubtreeOnly": true,
+  "staleExternalEditRefusedWithZeroByteChange": true,
+  "explicitReloadRequired": true,
+  "unsupportedSourceVisibleAndUnchanged": true,
+  "genericInspectorGuard": {
+    "hint": true,
+    "oldInspector": false,
+    "handles": 0
+  }
+}

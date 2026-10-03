@@ -1,7 +1,7 @@
 {
   "name": "slidev-addon-studio",
   "type": "module",
-  "version": "0.3.1",
+  "version": "0.3.1-oe2-evidence.0",
   "description": "A visual editor for Slidev. Select, drag, resize, animate and compose slides on the canvas, with every change written back to your Markdown.",
   "license": "MIT",
   "packageManager": "pnpm@11.20.0",
@@ -24,6 +24,7 @@
   },
   "files": [
     "client",
+    "components",
     "node",
     "setup",
     "shared",
@@ -44,14 +45,18 @@
     "vue": "^3.5.0"
   },
   "dependencies": {
+    "@vue/compiler-dom": "3.5.41",
     "@vueuse/core": "^14.0.0",
+    "fontkit": "2.0.4",
     "yaml": "^2.9.0"
   },
   "devDependencies": {
+    "@fontsource-variable/inter": "5.3.0",
     "@slidev/cli": "^52.19.0",
     "@slidev/client": "^52.19.0",
     "@slidev/theme-default": "^0.25.0",
     "@slidev/types": "^52.19.0",
+    "@types/fontkit": "2.0.3",
     "@types/markdown-it": "^14.1.2",
     "@types/node": "^22.10.2",
     "typescript": "^5.7.2",

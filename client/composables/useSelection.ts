@@ -7,6 +7,8 @@ import { onDomEvent } from './useDomEvent'
 import { normalise, resolveRange } from '../md/locate'
 import { readDrag } from '../md/drag'
 import { editing, hovered, missed, selection, studioOpen } from '../state'
+import { activeText, beginStudioTextEdit, endStudioTextEdit, inspectStudioText, textSelection } from '../studiotext-editor'
+import {clearLayers,inspectLayer} from '../managed-layer-editor'
 
 /**
  * Turns a click on the rendered slide into a Markdown range Studio can edit.
@@ -66,6 +68,10 @@ export function useSelection(
     // Whichever is nearer: a block of Markdown, or a string a layout was handed.
     // Nesting decides, because a labelled string can sit inside a mapped block
     // and the inner one is what was aimed at.
+    const renderOnly = node.closest<HTMLElement>('[data-studio-render-only]')
+    if(renderOnly)return {el:renderOnly,no:no(),range:null,kind:'component',tag:'RenderOnly',positioned:false,nested:false,label:'Render-only layer'}
+    const owner = node.closest<HTMLElement>('[data-studio-object-id]')
+    if (owner) return {el:owner,no:no(),range:null,kind:'component',tag:'StudioLayer',positioned:true,nested:false,label:`${owner.dataset.studioLayerKind} layer`}
     const el = node.closest<HTMLElement>('[data-studio-src], [data-studio-prop]')
     if (!el || !belongsToSlide(el, no()))
       return null
@@ -115,6 +121,11 @@ export function useSelection(
     if (target)
       selection.value = target
   }
+  onDomEvent<MouseEvent>(document,'click',event=>{
+    if(studioOpen.value && event.target instanceof Element && event.target.closest('[data-studio-object-id],[data-studio-render-only]')){
+      event.preventDefault();event.stopImmediatePropagation()
+    }
+  },{capture:true})
 
   /**
    * Right-click opens the slide's menu anywhere on the canvas side.
@@ -182,13 +193,44 @@ export function useSelection(
       missed.value = onSlide
       if (onSlide)
         selection.value = null
+      if (onSlide) { endStudioTextEdit(); activeText.value=null; clearLayers() }
       return
     }
+    // StudioText must receive native pointer selection so a second click can
+    // select a word. Its geometry controls arrive in M3.
+    if(target.el.closest('[data-studio-render-only]')){
+      event.preventDefault();event.stopImmediatePropagation();endStudioTextEdit();activeText.value=null;clearLayers();missed.value=false;selection.value=target;return
+    }
+    const managed = target.el.closest<HTMLElement>('[data-studio-text-id]')
+    if (managed) {
+      clearLayers()
+      missed.value = false
+      const id = managed.dataset.studioTextId
+      if (event.shiftKey && id && activeText.value?.document && !activeText.value.editing
+        && textSelection.value.mode === 'objects' && !textSelection.value.ids.includes(id)
+        && activeText.value.no === no()) {
+        textSelection.value = { mode: 'objects', ids: [...textSelection.value.ids, id] }
+        return
+      }
+      selection.value = target
+      if (id) textSelection.value = { mode: 'objects', ids: [id] }
+      void inspectStudioText(managed, no())
+      return
+    }
+    const layer = target.el.closest<HTMLElement>('[data-studio-object-id]')
+    if (layer) {
+      event.preventDefault(); event.stopImmediatePropagation()
+      missed.value=false; selection.value=target
+      void inspectLayer(layer,no(),event.shiftKey)
+      return
+    }
+    clearLayers()
     // Claim the gesture before Slidev's own `v-drag` handles or a link can.
     event.preventDefault()
     event.stopPropagation()
     missed.value = false
     selection.value = target
+    endStudioTextEdit()
   }, { capture: true })
 
   onDomEvent<PointerEvent>(document, 'pointermove', (event) => {
@@ -214,6 +256,9 @@ export function useSelection(
   onDomEvent<MouseEvent>(document, 'dblclick', (event) => {
     if (!studioOpen.value)
       return
+    if (event.target instanceof Element && (event.target.closest('[data-studio-object-id],[data-studio-render-only]') || (event.target.closest('.studio-move') && selection.value?.el.closest('[data-studio-object-id],[data-studio-render-only]')))) {
+      event.preventDefault(); event.stopImmediatePropagation(); return
+    }
 
     // The first click of a double click selects, which lays the move overlay
     // over the block, so the second click lands on the overlay rather than on
@@ -223,6 +268,12 @@ export function useSelection(
     // container.
     if (event.target instanceof Element && event.target.closest('.studio-move')) {
       const beneath = throughChrome(event.clientX, event.clientY) ?? selection.value
+      const studioText = beneath?.el.closest<HTMLElement>('[data-studio-text-id]')
+      if (studioText && beneath) {
+        selection.value = beneath
+        void beginStudioTextEdit(studioText, no())
+        return
+      }
       if (!beneath?.range && !beneath?.prop)
         return
       event.preventDefault()
@@ -235,6 +286,12 @@ export function useSelection(
       return
 
     const target = targetFrom(event.target) ?? targetFromPoint(event.clientX, event.clientY)
+    const studioText = target?.el.closest<HTMLElement>('[data-studio-text-id]')
+    if (studioText && target) {
+      selection.value = target
+      void beginStudioTextEdit(studioText, no())
+      return
+    }
     if (!target?.range && !target?.prop)
       return
     event.preventDefault()
@@ -247,6 +304,10 @@ export function useSelection(
       return
 
     if (event.key === 'Escape') {
+      if (activeText.value) {
+        endStudioTextEdit()
+        return
+      }
       // One layer at a time. A key pressed in a field belongs to that field,
       // and the inline editor closes itself, so clearing the selection here as
       // well meant cancelling an edit lost the block being edited.
@@ -266,7 +327,7 @@ export function useSelection(
     if (event.key !== 'Backspace' && event.key !== 'Delete')
       return
     // Never while the user is typing into one of the editor's own fields.
-    if (isTyping(event.target) || !selection.value?.range || !remove)
+    if (isTyping(event.target) || !selection.value?.range || !remove || selection.value.el.closest('[data-studio-text-id]'))
       return
 
     // Backspace would otherwise navigate the browser back and lose the deck.
@@ -369,6 +430,8 @@ export function useSelection(
       if (rebinding || !current || document.contains(current.el))
         return
 
+      const ownerId=current.el.dataset.studioObjectId
+      if(ownerId){const host=slideElement(no())?.querySelector<HTMLElement>(`[data-studio-object-id="${CSS.escape(ownerId)}"]`);if(host)selection.value={...current,el:host,range:null};return}
       // A selection that failed to trace has no range of its own, so the
       // element's own stamp is the hint. Without it the rebind gave up at once
       // and the selection stayed on a node that had gone.
@@ -441,6 +504,8 @@ function isTyping(target: EventTarget | null) {
 }
 
 function describe(el: HTMLElement, no: number, content: string): StudioTarget {
+  const renderOnly=el.closest<HTMLElement>('[data-studio-render-only]')
+  if(renderOnly)return {el:renderOnly,no,range:null,kind:'component',tag:'RenderOnly',positioned:false,nested:false,label:'Render-only layer'}
   const prop = el.dataset.studioProp
   if (prop) {
     return {

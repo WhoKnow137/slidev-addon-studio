@@ -12,6 +12,9 @@ import { missed, selection } from '../../state'
 import PropField from '../parts/PropField.vue'
 import StudioField from '../parts/StudioField.vue'
 import StudioIcon from '../parts/StudioIcon.vue'
+import TypographyInspector from '../TypographyInspector.vue'
+import GeometryInspector from '../GeometryInspector.vue'
+import LayerGeometryInspector from '../LayerGeometryInspector.vue'
 
 /**
  * The properties panel: where the selected block lives, how it is styled, and
@@ -146,6 +149,20 @@ async function remove() {
       Double click to rewrite them here, or open the Layout panel to change them
       along with the rest of the slide's settings.
     </p>
+  </div>
+
+  <section v-else-if="selection?.el.closest('[data-studio-render-only]')" class="studio-section" data-testid="render-only-inspector">
+    <h3 class="studio-section__title">Render-only layer</h3>
+    <p class="studio-hint" role="status">{{selection.el.closest('[data-studio-render-only]')?.getAttribute('data-studio-render-only')}}</p>
+    <p class="studio-hint">Mutation unavailable. No managed identity or geometry ownership was assigned. Manual source editing remains available in Slidev.</p>
+  </section>
+  <div v-else-if="selection?.el.closest('[data-studio-object-id]')" class="studio-managed-inspect">
+    <LayerGeometryInspector />
+  </div>
+  <div v-else-if="selection?.el.closest('[data-studio-text-id]')" class="studio-managed-inspect">
+    <GeometryInspector />
+    <TypographyInspector />
+    <p class="studio-hint">Double click text to edit words and select ranges. Open Slidev’s source editor for unsupported markup.</p>
   </div>
 
   <div v-else-if="!range" class="studio-empty">

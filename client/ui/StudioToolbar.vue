@@ -1,10 +1,17 @@
 <script setup lang="ts">
 import type { PanelId } from '../state'
-import { canRedo, canUndo, lastAction, useStudioHistory } from '../composables/useSlideSource'
+import { canRedo as genericRedo, canUndo as genericUndo, lastAction, useStudioHistory } from '../composables/useSlideSource'
+import {computed} from 'vue'
+import {activeLayer,sourceHistory} from '../managed-layer-editor'
+import {activeText} from '../studiotext-editor'
 import { activePanel, gridEnabled, outlineEnabled, snapEnabled, studioOpen } from '../state'
 import StudioIcon from './parts/StudioIcon.vue'
 
-const history = useStudioHistory()
+const genericHistory = useStudioHistory()
+const managed=computed(()=>!!activeLayer.value||!!activeText.value||sourceHistory.structuralHead.value)
+const canUndo=computed(()=>managed.value?sourceHistory.canUndo.value:genericUndo.value)
+const canRedo=computed(()=>managed.value?sourceHistory.canRedo.value:genericRedo.value)
+const history={undo:()=>managed.value?sourceHistory.undo():genericHistory.undo(),redo:()=>managed.value?sourceHistory.redo():genericHistory.redo()}
 
 /**
  * Only shown while Studio is open. When it is closed the way in is Slidev's own

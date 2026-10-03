@@ -1,0 +1,5 @@
+*.md text eol=lf
+*.vue text eol=lf
+*.mjs text eol=lf
+*.json text eol=lf
+*.png binary

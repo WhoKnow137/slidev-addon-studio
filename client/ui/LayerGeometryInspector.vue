@@ -1,0 +1,51 @@
+<script setup lang="ts">
+import {computed} from 'vue'
+import {activeLayer,selectedLayers,layerCommand,layerError,layerBusy,structuralLayer} from '../managed-layer-editor'
+import {geometryDisplay} from '../../shared/geometry'
+import type {LayerGeometry} from '../../shared/managed-layer'
+const fields=[['x','X'],['y','Y'],['width','W'],['height','H'],['rotationDeg','Rotation']] as const
+const model=computed(()=>activeLayer.value?.document),multiple=computed(()=>selectedLayers.value.length>1)
+const mixed=(k:keyof LayerGeometry)=>selectedLayers.value.some(s=>s.document.geometry[k]!==model.value?.geometry[k])
+const disabled=(k:keyof LayerGeometry)=>layerBusy.value||!model.value||selectedLayers.value.some(s=>['READ_ONLY','UNAVAILABLE'].includes(s.document.capabilities.level))||(['width','height'].includes(k)&&(multiple.value||model.value.capabilities.level!=='FULL'))||(k==='rotationDeg'&&(multiple.value||!model.value.capabilities.rotation))
+let focusedRevision:string|undefined
+async function commit(k:keyof LayerGeometry,event:Event){
+  const input=event.target as HTMLInputElement
+  if(!input.value.trim()){layerError.value='Enter a finite geometry value';return}
+  await layerCommand({kind:'set',property:k,value:Number(input.value)},focusedRevision)
+}
+</script>
+<template>
+  <section class="studio-section" data-testid="layer-geometry-inspector">
+    <h3 class="studio-section__title">Layer transform</h3>
+    <p>{{model?.kind}} · {{model?.capabilities.level}}</p>
+    <p class="studio-hint">Source: {{model?.source.figmaGuid}} ({{model?.source.kiwiType}})</p>
+    <p class="studio-hint" role="status">{{model?.capabilities.reason}}</p>
+    <div class="studio-type-grid">
+      <label v-for="[key,label] in fields" :key="key" class="studio-type-field">{{label}}
+        <input :aria-label="label" type="number" step="1" :disabled="disabled(key)" :value="mixed(key)?'':model?geometryDisplay(model.geometry[key]):''" :placeholder="mixed(key)?'Mixed':''" @focus="focusedRevision=activeLayer?.revision" @change="commit(key,$event)" />
+      </label>
+    </div>
+    <p v-if="multiple" class="studio-hint">Drag translates all selected layers. Typed X/Y sets each layer to that absolute parent-local value. Multi-resize and multi-rotate are unavailable.</p>
+    <div v-if="!multiple && model && !['READ_ONLY','UNAVAILABLE'].includes(model.capabilities.level) && model.kind!=='instance'" class="studio-button-row">
+      <button class="studio-button" type="button" :disabled="layerBusy" @click="structuralLayer('duplicate')">Duplicate</button>
+      <button class="studio-button" type="button" :disabled="layerBusy" @click="structuralLayer('delete')">Delete</button>
+    </div>
+    <p class="studio-hint">Duplicate and delete are available for supported layers. Paint, crop, replacement and corner editing are not yet available.</p>
+    <section v-if="model?.paintInspection && !multiple" data-testid="image-paint-inspector" aria-label="Image paint evidence">
+      <h3 class="studio-section__title">Image paint · read-only</h3>
+      <p class="studio-hint">{{model.paintInspection.ownership}} · {{model.paintInspection.evidence.scope}}</p>
+      <p class="studio-hint">Native mode, matrix direction and coordinate space: unknown. Layer geometry and paint geometry are separate.</p>
+      <dl v-for="paint in model.paintInspection.images" :key="paint.sourcePath" class="studio-hint">
+        <dt>Source address (not identity)</dt><dd>{{paint.sourcePath}}</dd>
+        <dt>Raw private mode</dt><dd>{{paint.rawMode ?? 'absent'}}</dd>
+        <dt>Intrinsic dimensions</dt><dd>{{paint.intrinsicWidth ?? 'absent'}} × {{paint.intrinsicHeight ?? 'absent'}}</dd>
+        <dt>Paint opacity</dt><dd>{{paint.paintOpacity ?? 'absent'}}</dd>
+        <dt>Raw matrix</dt><dd><code>{{JSON.stringify(paint.rawMatrix)}}</code></dd>
+      </dl>
+      <p class="studio-hint">Layer opacity: {{model.paintInspection.evidence.layer.opacity ?? 'absent'}}</p>
+      <details><summary>Preserved paint/resource evidence</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere">{{JSON.stringify(model.paintInspection.evidence,null,2)}}</pre></details>
+      <p class="studio-hint" role="status">Editing blocked pending native fixtures I-F01–I-F05 and B-F02. STRETCH is not classified as Crop.</p>
+    </section>
+    <p v-if="layerError" class="studio-error" role="alert">{{layerError}}</p>
+  </section>
+</template>

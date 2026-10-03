@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "styles": [
+    {
+      "id": "heading/hero",
+      "name": "Heading / Hero",
+      "character": {
+        "fontFamily": "Inter",
+        "fontSize": 52,
+        "fontWeight": 700,
+        "color": "#ffffff"
+      },
+      "paragraph": {
+        "spacingAfter": 10,
+        "direction": "ltr"
+      }
+    }
+  ]
+}

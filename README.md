@@ -181,10 +181,9 @@ own `components/` directory.
 | <kbd>Alt</kbd> (held) | Bypass snapping while dragging |
 | <kbd>Shift</kbd> (held) | Keep aspect ratio, or snap rotation to 15 degrees |
 
-Undo history lives in the page, so a reload clears it, and so does anything that
-renumbers the deck: adding, duplicating, deleting, reordering or skipping a
-slide. Undo replays a whole slide by its number, and after a renumbering those
-numbers point somewhere else. Your deck is a file in git; that is the real undo.
+For ordinary hand-authored Slidev content, undo history lives in the page and
+a reload clears it. Generated projects with managed pages use the M6 structural
+history described below for supported object and slide operations.
 
 ## Teaching Studio about your components
 
@@ -440,3 +439,48 @@ being copied once at install time.
 ## License
 
 MIT
+
+## Managed text: M5 typography
+
+`StudioText version="1"` uses typed source properties, stable IDs, grapheme selections and revision-guarded source transactions. Double click a text object (or select it and use **Edit text**) to edit words and select ranges. The typography inspector supports font search/preview, real font faces, arbitrary variable axes, inspected OpenType features, named shared styles, paragraph spacing/indents/lists/direction, and links. Object font replacement and selected-range replacement are supported; multi-object/deck-wide font replacement and shared-style deletion are deferred.
+
+Font metadata comes from installed `@fontsource` / `@fontsource-variable` packages and actual font tables under `public/fonts`. Indexing is cached until package locks, project font metadata, or local font files change. Project resources take priority over configured web fonts, then detected system fonts. Browser Local Font Access is optional and requires the user's browser permission; manual family entry remains available. Neither discovery nor replacement copies system font binaries.
+
+Configure additional known font metadata in `public/studio-fonts.json`:
+
+```json
+{"version":1,"fonts":[{"family":"My Web Font","source":"web","styles":[{"weight":400,"style":"normal"}]}]}
+```
+
+Font loading remains explicit: supply the matching CSS `@font-face` or project stylesheet. The picker never constructs an internet request from a typed family name. Bundled fonts without an existing CSS face need a project `@font-face` declaration too. Missing/unavailable families stay in source and render using the browser fallback; replacement is an explicit action. Font loading is cached; preview waits for `FontFaceSet.load` or a bounded timeout. Browser intrinsic measurement continues to control Auto Width/Height; changing a font does not freeze source dimensions.
+
+Additional source grammar:
+
+```vue
+<StudioText version="1" id="example" pos="0,0,400,auto" resize="auto-height" style-ref="heading/hero" font-axes="{&quot;wght&quot;:620}" open-type="{&quot;tnum&quot;:true}"><StudioParagraph spacing-before="4" spacing-after="16" indent="24" first-line-indent="-8" list-kind="ordered" list-level="1" direction="rtl"><StudioRun link="https://example.com">Linked text</StudioRun></StudioParagraph></StudioText>
+```
+
+Shared styles live in the versioned, human-readable `public/studio-text-styles.json`. Cascade: shared style → object local defaults → paragraph properties → character run overrides → caret typing style. Applying/detaching a style changes one text object in one transaction. Definition edits use a separate serialized, revision-guarded resource history; **Undo style** operates on that history. Detaching materializes the effective values and preserves appearance. Links remain range properties; object-style link declarations are explicitly refused. Figma style IDs are not automatically mapped to these resources.
+
+Paragraph measurements are CSS/slide pixels. List levels 0–12 add 24px per level; numbered lists have separate counters per level, reset by deeper/ordinary paragraph boundaries. Markers are rendered semantics, not inserted characters. Changing list kind preserves each paragraph's indentation. Character range formatting affects selected graphemes only; paragraph controls apply to every intersected paragraph. Links accept HTTP(S), mailto, `#` anchors and project-relative `/` paths; unsafe schemes are refused. RTL uses HTML `dir` and browser bidi layout while source order remains logical.
+
+Font hover and axis movement are temporary previews with no source/history write. An axis gesture captures the source revision and selection; commit is refused if either changed. IME intermediates are buffered and the final composition is one typed transaction. The public fixture simulates Japanese, Chinese Pinyin and Korean events; actual OS IME testing remains a manual platform check.
+
+Public regression fixture: `slidev m5/fixture/slides.md --port 3316`; plain runtime fixture: `slidev build m5/fixture/slides-plain.md`. Fixture font licenses are included beside their binaries. No private deck material belongs in this repository.
+
+## Managed structural operations: M6
+
+Generated `.deck` projects with `data/slides/index.json` use one revision-guarded
+structural transaction for each supported object or slide operation. Select a
+managed layer and use **Duplicate** or **Delete** in the inspector (or
+<kbd>Ctrl</kbd>+<kbd>D</kbd> / <kbd>Delete</kbd>). The existing Slides panel uses
+the same transaction system to duplicate, reorder and delete generated slides.
+These operations share undo/redo order with managed text and layer edits.
+
+The transaction includes page source, slide order, notes files, provenance and
+resource reachability as needed. A journal in `.studio-structural/` lets Studio
+finish an interrupted commit on restart or report a conflicting recovery state.
+The source and referenced resource bytes remain ordinary project files.
+Supported root reorder, simple frame reparent and cross-slide movement are
+available through the guarded `/@studio/structural` API; component/constraint
+semantics and media replacement remain gated. See [M6 architecture](docs/M6.md).

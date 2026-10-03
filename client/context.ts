@@ -2,6 +2,8 @@ import type { InjectionKey } from 'vue'
 import type { SourceRange } from './types'
 import type { useSlideCanvas } from './composables/useSlideCanvas'
 import type { useTransformGizmo } from './composables/useTransformGizmo'
+import type { useTextGeometryGizmo } from './composables/useTextGeometryGizmo'
+import type { useLayerGeometryGizmo } from './composables/useLayerGeometryGizmo'
 import { inject, shallowRef } from 'vue'
 
 /**
@@ -16,6 +18,8 @@ export interface StudioContext {
   note: () => string
   canvas: ReturnType<typeof useSlideCanvas>
   gizmo: ReturnType<typeof useTransformGizmo>
+  textGizmo: ReturnType<typeof useTextGeometryGizmo>
+  layerGizmo: ReturnType<typeof useLayerGeometryGizmo>
   /**
    * Writes new Markdown for the current slide and restores the selection.
    * `skipHmr` leaves the rendered slide alone for a change the caller has

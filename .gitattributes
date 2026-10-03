@@ -1,0 +1,9 @@
+docs/M6.md -text
+node/structural-service.ts -text
+node/structural-transaction.ts -text
+test/m6-private-regression.test.ts -text
+test/structural-service.test.ts -text
+test/structural-transaction.test.ts -text
+shared/image-paint.ts -text
+test/image-paint.test.ts -text
+docs/OE2_EVIDENCE.md -text

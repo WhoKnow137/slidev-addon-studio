@@ -1,5 +1,6 @@
 import type { StudioAsset } from '../types'
 import { busy, reportError } from '../state'
+import { sourceSession } from '../source-session'
 
 /**
  * The dev-only endpoints Studio adds on top of Slidev's own.
@@ -38,6 +39,16 @@ function post<T>(route: string, payload: unknown) {
   })
 }
 
+async function postDeck(payload: Record<string, unknown>) {
+  const state=await request<{supported:boolean,revisions?:Record<string,string>}>('deck')
+  if (!state) return null
+  const result=await post<DeckResult>('deck',state.supported
+    ? {...payload,session:sourceSession(),expectedRevision:state.revisions?.['slides.md']}
+    : payload)
+  if(result&&state.supported)void import('../managed-layer-editor').then(({sourceHistory})=>sourceHistory.refresh())
+  return result
+}
+
 export interface DeckResult {
   ok: true
   no: number
@@ -46,10 +57,10 @@ export interface DeckResult {
 
 export const deckApi = {
   insert: (after: number, content?: string, frontmatter?: string) =>
-    post<DeckResult>('deck', { action: 'insert', after, content, frontmatter }),
-  duplicate: (no: number) => post<DeckResult>('deck', { action: 'duplicate', no }),
-  remove: (no: number) => post<DeckResult>('deck', { action: 'remove', no }),
-  move: (no: number, to: number) => post<DeckResult>('deck', { action: 'move', no, to }),
+    postDeck({ action: 'insert', after, content, frontmatter }),
+  duplicate: (no: number) => postDeck({ action: 'duplicate', no }),
+  remove: (no: number) => postDeck({ action: 'remove', no }),
+  move: (no: number, to: number) => postDeck({ action: 'move', no, to }),
 }
 
 export const assetApi = {
